@@ -37,10 +37,11 @@ Chrome 138+ 需要单独打开油猴的用户脚本权限，否则脚本显示�
 1. 安装 [Tampermonkey](https://www.tampermonkey.net/)。
 2. 新建脚本，粘贴 [`userscript/sensebook.user.js`](userscript/sensebook.user.js) 全文并保存。
 3. 打开任意网页划选单词：
-   - **存词** → 写入本地（键名 `sensebook_entries`），**无需 API / Token**
-   - **AI释义** → 已在「LLM 设置」配置 DeepSeek Key 时直连生成真实释义；未配置时使用本地 stub
-   - **翻译** → 未配置可选同步 API 时显示占位提示
-4. 油猴菜单 **「Sensebook：我的生词（本地）」** 可查看 / 删除本地词库；**「Sensebook：LLM 设置」** 配置 DeepSeek。也可从划词弹层的 **DeepSeek** 按钮、词库面板顶部的 **配置 DeepSeek** 按钮，或右下角 Sensebook FAB 进入。
+   - **选中自动查询**（默认开）→ 划词弹层出现后约 0.35 秒自动轻量翻译，结果展示在按钮下方；可在 LLM 设置或 FAB 中开关（键名 `sensebook_auto_query`）
+   - **翻译** → 弹层结果区显示译文；命中本地缓存则即时回看，可再点翻译强制刷新
+   - **存词** → 写入本地生词本（键名 `sensebook_entries`），**无需 API / Token**
+   - **AI释义** → 已配置 DeepSeek Key 时直连生成真实释义；未配置时使用本地 stub；成功结果也会写入查询缓存
+4. 油猴菜单 / FAB：**「我的生词」**、**「查询记录」**（本地缓存 `sensebook_query_cache`，约 250 条 LRU）、**「LLM 设置」**。也可从划词弹层的 **DeepSeek** / **生词** 进入。
 
 本地模式说明也会在菜单「关于本地模式」中提示。登录相关菜单标注为 **「登录/同步（可选）」**。
 
@@ -54,7 +55,8 @@ AI 释义走油猴 **直连** DeepSeek 的 OpenAI 兼容接口（`GM_xmlhttpRequ
    - **Base URL**：默认 `https://api.deepseek.com/v1`（高级可改；须为 OpenAI 兼容的 **`/v1` 根**，脚本会追加 `/chat/completions`，勿填完整 completions 路径）
    - **API Key**：从 [DeepSeek API Keys 页面](https://platform.deepseek.com/api_keys) 创建或复制；面板也提供「去 DeepSeek 官网创建 API Key」链接；密码框 + 可显示；下方显示是否已设置（脱敏）
    - **模型**：默认 `deepseek-flash`（可改）
-3. 点 **保存** 写入本机（键名仍为 `sensebook_llm_base_url` / `sensebook_llm_api_key` / `sensebook_llm_model`）。
+   - **选中自动查询**：默认开启；关闭后仅手动点「翻译」才会请求
+3. 点 **保存** 写入本机（键名仍为 `sensebook_llm_base_url` / `sensebook_llm_api_key` / `sensebook_llm_model`，以及 `sensebook_auto_query`）。
 4. 可选点 **测试连接**：向 `{base}/chat/completions` 发一条极小请求，面板内显示成功 / 鉴权失败 / 网络错误。
 5. **清除 Key** 只删 Key，保留 URL 与模型。
 

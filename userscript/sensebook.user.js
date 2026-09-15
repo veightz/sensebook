@@ -3,8 +3,8 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609151754
-// @description  划词翻译 / 存词 / AI 释义 — Sensebook（本地优先；DeepSeek LLM 设置面板）
+// @version      0.1.202609151818
+// @description  划词自动查询 / 翻译 / 存词 / AI 释义 — Sensebook（本地缓存与查询记录）
 // @author       Sensebook
 // @match        *://*/*
 // @grant        GM_getValue
@@ -124,6 +124,10 @@
   const LLM_API_KEY_KEY = 'sensebook_llm_api_key';
   const LLM_MODEL_KEY = 'sensebook_llm_model';
   const ONBOARDING_DONE_KEY = 'sensebook_onboarding_done';
+  const AUTO_QUERY_KEY = 'sensebook_auto_query';
+  const QUERY_CACHE_KEY = 'sensebook_query_cache';
+  const QUERY_CACHE_CAP = 250;
+  const AUTO_QUERY_DEBOUNCE_MS = 350;
 
   const DEFAULT_LLM_BASE_URL = 'https://api.deepseek.com/v1';
   const DEFAULT_LLM_MODEL = 'deepseek-flash';
@@ -191,6 +195,17 @@
     return !!getLlmApiKey();
   }
 
+  /** Auto-query on selection; default ON. */
+  function isAutoQueryEnabled() {
+    const v = storeGet(AUTO_QUERY_KEY, true);
+    if (v === false || v === 'false' || v === 0 || v === '0') return false;
+    return true;
+  }
+
+  function setAutoQueryEnabled(on) {
+    storeSet(AUTO_QUERY_KEY, !!on);
+  }
+
   function uuid() {
     if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -246,6 +261,80 @@
     return entry;
   }
 
+  // ---- query cache (local lookup history; LRU by updated_at) ----
+  function normalizeWord(word) {
+    return String(word || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+
+  function sentenceContextKey(sentence) {
+    return String(sentence || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+  }
+
+  function makeCacheKey(word, sentence) {
+    return normalizeWord(word) + '::' + sentenceContextKey(sentence);
+  }
+
+  function loadQueryCache() {
+    const raw = storeGet(QUERY_CACHE_KEY, []);
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  }
+
+  function saveQueryCache(list) {
+    storeSet(QUERY_CACHE_KEY, list);
+  }
+
+  function getCachedByKey(cacheKey) {
+    const list = loadQueryCache();
+    return list.find((x) => x && x.cacheKey === cacheKey) || null;
+  }
+
+  function upsertQueryCache( partial ) {
+    const word = partial.word || '';
+    const sentence = partial.sentence || word || '';
+    const cacheKey = partial.cacheKey || makeCacheKey(word, sentence);
+    const now = new Date().toISOString();
+    let list = loadQueryCache();
+    const idx = list.findIndex((x) => x && x.cacheKey === cacheKey);
+    let record;
+    if (idx >= 0) {
+      record = {
+        ...list[idx],
+        ...partial,
+        cacheKey,
+        word,
+        sentence,
+        updated_at: now,
+      };
+      list.splice(idx, 1);
+    } else {
+      record = {
+        id: partial.id || uuid(),
+        cacheKey,
+        word,
+        sentence,
+        translation: partial.translation || '',
+        ai_word_sense: partial.ai_word_sense ?? null,
+        ai_sentence_gloss: partial.ai_sentence_gloss ?? null,
+        source_url: partial.source_url || '',
+        created_at: now,
+        updated_at: now,
+      };
+    }
+    list.unshift(record);
+    if (list.length > QUERY_CACHE_CAP) list = list.slice(0, QUERY_CACHE_CAP);
+    saveQueryCache(list);
+    return record;
+  }
+
   function clientStubEnrich(word, sentence) {
     return {
       ai_sentence_gloss: `[本地 stub] 句意占位：${(sentence || '').slice(0, 80)}`,
@@ -298,10 +387,15 @@
   // Menus + FAB boot run at end (after function decls); safe gmMenu never aborts IIFE.
 
   let popup = null;
+  let popupBtnRow = null;
+  let popupResultEl = null;
   let panel = null;
   let llmPanelHost = null;
   let lastSel = { text: '', sentence: '', rect: null };
-  let busy = false;
+  let busy = false; // only for heavy manual AI释义 / optional server paths
+  let selectionGen = 0; // bumps on each new selection; stale responses discard
+  let autoQueryTimer = null;
+  const inFlightByCacheKey = new Map(); // cacheKey -> Promise (dedupe)
   let fabRoot = null;
   let fabSheet = null;
   let fabButton = null;
@@ -373,26 +467,72 @@
   }
 
   function hidePopup() {
+    if (autoQueryTimer) {
+      clearTimeout(autoQueryTimer);
+      autoQueryTimer = null;
+    }
     if (popup) {
       popup.remove();
       popup = null;
     }
+    popupBtnRow = null;
+    popupResultEl = null;
+  }
+
+  function ensurePopupResultEl() {
+    if (!popup) return null;
+    if (popupResultEl && popup.contains(popupResultEl)) return popupResultEl;
+    const el = document.createElement('div');
+    el.setAttribute('data-sensebook-result', '1');
+    Object.assign(el.style, {
+      display: 'none',
+      width: '100%',
+      marginTop: '2px',
+      padding: '8px 10px',
+      borderTop: '1px solid #e2e8f0',
+      fontSize: '13px',
+      lineHeight: '1.45',
+      color: '#334155',
+      maxWidth: 'min(360px, calc(100vw - 32px))',
+      maxHeight: '160px',
+      overflow: 'auto',
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word',
+      boxSizing: 'border-box',
+    });
+    popup.appendChild(el);
+    popupResultEl = el;
+    return el;
+  }
+
+  /** kind: 'loading' | 'ok' | 'cache' | 'error' | 'hint' */
+  function setPopupResult(msg, kind) {
+    const el = ensurePopupResultEl();
+    if (!el) return;
+    el.style.display = 'block';
+    el.textContent = msg || '';
+    if (kind === 'error') el.style.color = '#b91c1c';
+    else if (kind === 'loading') el.style.color = '#6d28d9';
+    else if (kind === 'hint') el.style.color = '#64748b';
+    else if (kind === 'cache') el.style.color = '#0f766e';
+    else el.style.color = '#334155';
   }
 
   function setPopupLoading(msg) {
-    if (!popup) return;
-    popup.innerHTML = '';
-    const span = document.createElement('div');
-    span.textContent = msg || 'AI 释义中…';
-    Object.assign(span.style, {
-      padding: '12px 16px',
-      fontSize: '14px',
-      color: '#4c1d95',
-      fontFamily: 'system-ui,sans-serif',
-      minWidth: '120px',
-      textAlign: 'center',
-    });
-    popup.appendChild(span);
+    setPopupResult(msg || '查询中…', 'loading');
+  }
+
+  function repositionPopup(rect) {
+    if (!popup || !rect) return;
+    const pw = popup.offsetWidth;
+    const ph = popup.offsetHeight;
+    let top = rect.bottom + 8;
+    let left = rect.left + rect.width / 2 - pw / 2;
+    if (top + ph > window.innerHeight - 8) top = rect.top - ph - 8;
+    if (left < 8) left = 8;
+    if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
+    popup.style.top = Math.max(8, top) + 'px';
+    popup.style.left = left + 'px';
   }
 
   function showPopup(rect) {
@@ -403,9 +543,9 @@
       position: 'fixed',
       zIndex: '2147483646',
       display: 'flex',
-      gap: '6px',
+      flexDirection: 'column',
+      gap: '4px',
       padding: '6px',
-      flexWrap: 'wrap',
       maxWidth: 'calc(100vw - 16px)',
       boxSizing: 'border-box',
       background: '#fff',
@@ -413,6 +553,13 @@
       boxShadow: '0 4px 20px rgba(0,0,0,.18)',
       border: '1px solid #e2e8f0',
       fontFamily: 'system-ui,sans-serif',
+    });
+
+    popupBtnRow = document.createElement('div');
+    Object.assign(popupBtnRow.style, {
+      display: 'flex',
+      gap: '6px',
+      flexWrap: 'wrap',
     });
 
     const mkBtn = (label, onClick, bg) => {
@@ -435,32 +582,26 @@
       b.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (busy) return;
+        // Auto-query must not block buttons; only heavy enrich uses busy.
+        if (busy && label === 'AI释义') return;
         onClick();
       });
       return b;
     };
 
-    popup.appendChild(mkBtn('翻译', () => doTranslate()));
-    popup.appendChild(mkBtn('存词', () => doSave(false)));
-    popup.appendChild(mkBtn('AI释义', () => doSave(true), '#7c3aed'));
-    popup.appendChild(mkBtn('DeepSeek', () => {
+    popupBtnRow.appendChild(mkBtn('翻译', () => doTranslate({ forceRefresh: true })));
+    popupBtnRow.appendChild(mkBtn('存词', () => doSave(false)));
+    popupBtnRow.appendChild(mkBtn('AI释义', () => doSave(true), '#7c3aed'));
+    popupBtnRow.appendChild(mkBtn('DeepSeek', () => {
       hidePopup();
       setTimeout(() => showLlmSettingsPanel(), 50);
     }, '#475569'));
-    popup.appendChild(mkBtn('生词', () => { hidePopup(); showLocalPanel(); }, '#0f766e'));
+    popupBtnRow.appendChild(mkBtn('生词', () => { hidePopup(); showLocalPanel(); }, '#0f766e'));
 
+    popup.appendChild(popupBtnRow);
+    ensurePopupResultEl();
     document.documentElement.appendChild(popup);
-
-    const pw = popup.offsetWidth;
-    const ph = popup.offsetHeight;
-    let top = rect.bottom + 8;
-    let left = rect.left + rect.width / 2 - pw / 2;
-    if (top + ph > window.innerHeight - 8) top = rect.top - ph - 8;
-    if (left < 8) left = 8;
-    if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
-    popup.style.top = Math.max(8, top) + 'px';
-    popup.style.left = left + 'px';
+    repositionPopup(rect);
   }
 
   function hidePanel() {
@@ -631,6 +772,12 @@
   <label>模型 <span class="hint">默认 deepseek-flash，可改</span></label>
   <input type="text" id="model" autocomplete="off" spellcheck="false" />
 
+  <label style="display:flex;align-items:center;gap:8px;font-weight:600;margin-top:14px;">
+    <input type="checkbox" id="autoQuery" style="width:18px;height:18px;" />
+    选中自动查询
+  </label>
+  <div class="hint" style="margin-top:4px;">划词后约 0.35 秒自动轻量翻译；结果与缓存可在「查询记录」回看。</div>
+
   <div class="note">
     Sensebook 的 Base URL 是 OpenAI 兼容的 <strong>/v1</strong> 根（例如 <code>https://api.deepseek.com/v1</code>），脚本会自动追加 <code>/chat/completions</code>，请勿填完整 completions 路径。
   </div>
@@ -656,6 +803,8 @@
     modelInput.value = modelVal;
     keyInput.value = curKey;
     keyStatus.textContent = '当前：' + maskApiKey(curKey);
+    const autoQueryInput = $('autoQuery');
+    if (autoQueryInput) autoQueryInput.checked = isAutoQueryEnabled();
     const card = shadow.querySelector('.card');
     card.addEventListener('click', (e) => e.stopPropagation());
 
@@ -691,6 +840,7 @@
       storeSet(LLM_API_KEY_KEY, key);
       storeSet(LLM_MODEL_KEY, model || DEFAULT_LLM_MODEL);
       storeSet(ONBOARDING_DONE_KEY, true);
+      if (autoQueryInput) setAutoQueryEnabled(!!autoQueryInput.checked);
       updateFabState();
       // Reflect defaults in fields if user cleared
       if (!base) baseInput.value = DEFAULT_LLM_BASE_URL;
@@ -764,6 +914,291 @@
     keyInput.focus();
   }
 
+
+  function formatTimeShort(iso) {
+    if (!iso) return '';
+    try {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return String(iso).slice(0, 19);
+      const pad = (n) => String(n).padStart(2, '0');
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+        ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    } catch {
+      return String(iso).slice(0, 19);
+    }
+  }
+
+  function showQueryHistoryPanel(filterText) {
+    hidePanel();
+    const q = String(filterText || '').trim().toLowerCase();
+    let entries = loadQueryCache();
+    if (q) {
+      entries = entries.filter((e) => String(e.word || '').toLowerCase().includes(q));
+    }
+    panel = document.createElement('div');
+    panel.id = 'sensebook-panel';
+    Object.assign(panel.style, {
+      position: 'fixed',
+      top: '0',
+      right: '0',
+      width: 'min(400px, 100vw)',
+      height: '100vh',
+      zIndex: '2147483646',
+      background: '#f8fafc',
+      boxShadow: '-4px 0 24px rgba(0,0,0,.2)',
+      fontFamily: 'system-ui,sans-serif',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+    });
+
+    const header = document.createElement('div');
+    Object.assign(header.style, {
+      padding: '14px 16px',
+      borderBottom: '1px solid #e2e8f0',
+      background: '#fff',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '10px',
+      flexShrink: '0',
+    });
+    header.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+      <div>
+        <div style="font-weight:700;font-size:16px;">查询记录</div>
+        <div style="font-size:12px;color:#64748b;margin-top:2px;">本地缓存 · 最多 ${QUERY_CACHE_CAP} 条 · 当前 ${entries.length} 条</div>
+      </div>
+    </div>`;
+
+    const toolbar = document.createElement('div');
+    Object.assign(toolbar.style, {
+      display: 'flex',
+      gap: '6px',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+    });
+    const search = document.createElement('input');
+    search.type = 'search';
+    search.placeholder = '按单词过滤…';
+    search.value = filterText || '';
+    Object.assign(search.style, {
+      flex: '1',
+      minWidth: '120px',
+      minHeight: '40px',
+      padding: '8px 10px',
+      border: '1px solid #cbd5e1',
+      borderRadius: '8px',
+      fontSize: '14px',
+      boxSizing: 'border-box',
+    });
+    const goBtn = document.createElement('button');
+    goBtn.type = 'button';
+    goBtn.textContent = '搜索';
+    Object.assign(goBtn.style, {
+      minHeight: '40px',
+      padding: '8px 12px',
+      border: 'none',
+      borderRadius: '8px',
+      background: '#2563eb',
+      color: '#fff',
+      cursor: 'pointer',
+      fontSize: '13px',
+    });
+    goBtn.onclick = () => showQueryHistoryPanel(search.value);
+    search.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') showQueryHistoryPanel(search.value);
+    });
+
+    const vocabBtn = document.createElement('button');
+    vocabBtn.type = 'button';
+    vocabBtn.textContent = '生词本';
+    Object.assign(vocabBtn.style, {
+      minHeight: '40px',
+      padding: '8px 10px',
+      border: 'none',
+      borderRadius: '8px',
+      background: '#0f766e',
+      color: '#fff',
+      cursor: 'pointer',
+      fontSize: '13px',
+    });
+    vocabBtn.onclick = () => showLocalPanel();
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.textContent = '关闭';
+    Object.assign(closeBtn.style, {
+      minHeight: '40px',
+      padding: '8px 12px',
+      border: 'none',
+      borderRadius: '8px',
+      background: '#64748b',
+      color: '#fff',
+      cursor: 'pointer',
+      fontSize: '14px',
+    });
+    closeBtn.onclick = () => hidePanel();
+
+    toolbar.appendChild(search);
+    toolbar.appendChild(goBtn);
+    toolbar.appendChild(vocabBtn);
+    toolbar.appendChild(closeBtn);
+    header.appendChild(toolbar);
+    panel.appendChild(header);
+
+    const body = document.createElement('div');
+    Object.assign(body.style, {
+      overflow: 'auto',
+      padding: '12px',
+      flex: '1',
+    });
+
+    if (!entries.length) {
+      body.innerHTML = '<div style="padding:16px;color:#64748b;font-size:14px;">暂无查询记录。划词自动查询或点「翻译」后会出现在这里。</div>';
+    } else {
+      body.innerHTML = entries.map((e) => {
+        const snippet = escapeHtml(String(e.translation || e.ai_word_sense || '').slice(0, 80));
+        return `
+        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:10px;cursor:pointer;" data-cache-id="${escapeHtml(e.id)}">
+          <div style="font-weight:700;font-size:15px;">${escapeHtml(e.word)}</div>
+          <div style="margin:6px 0;color:#475569;font-size:13px;">${snippet || '（无译文）'}</div>
+          <div style="font-size:11px;color:#94a3b8;">${escapeHtml(formatTimeShort(e.updated_at || e.created_at))}</div>
+        </div>`;
+      }).join('');
+    }
+    panel.appendChild(body);
+
+    body.addEventListener('click', (ev) => {
+      let node = ev.target;
+      while (node && node !== body && !(node.getAttribute && node.getAttribute('data-cache-id'))) {
+        node = node.parentElement;
+      }
+      if (!node || node === body) return;
+      const id = node.getAttribute('data-cache-id');
+      const rec = loadQueryCache().find((x) => x.id === id);
+      if (rec) showQueryDetail(rec);
+    });
+
+    document.documentElement.appendChild(panel);
+  }
+
+  function showQueryDetail(rec) {
+    hidePanel();
+    panel = document.createElement('div');
+    panel.id = 'sensebook-panel';
+    Object.assign(panel.style, {
+      position: 'fixed',
+      top: '0',
+      right: '0',
+      width: 'min(400px, 100vw)',
+      height: '100vh',
+      zIndex: '2147483646',
+      background: '#f8fafc',
+      boxShadow: '-4px 0 24px rgba(0,0,0,.2)',
+      fontFamily: 'system-ui,sans-serif',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+    });
+
+    const header = document.createElement('div');
+    Object.assign(header.style, {
+      padding: '14px 16px',
+      borderBottom: '1px solid #e2e8f0',
+      background: '#fff',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      gap: '8px',
+      flexShrink: '0',
+    });
+    header.innerHTML = `<div>
+      <div style="font-weight:700;font-size:16px;">${escapeHtml(rec.word)}</div>
+      <div style="font-size:12px;color:#64748b;margin-top:2px;">查询详情 · ${escapeHtml(formatTimeShort(rec.updated_at || rec.created_at))}</div>
+    </div>`;
+    const backBtn = document.createElement('button');
+    backBtn.type = 'button';
+    backBtn.textContent = '返回';
+    Object.assign(backBtn.style, {
+      minHeight: '40px',
+      padding: '8px 12px',
+      border: 'none',
+      borderRadius: '8px',
+      background: '#64748b',
+      color: '#fff',
+      cursor: 'pointer',
+      fontSize: '14px',
+    });
+    backBtn.onclick = () => showQueryHistoryPanel();
+    header.appendChild(backBtn);
+    panel.appendChild(header);
+
+    const body = document.createElement('div');
+    Object.assign(body.style, { overflow: 'auto', padding: '12px', flex: '1' });
+    body.innerHTML = `
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px;">
+        <div style="font-size:13px;color:#64748b;margin-bottom:4px;">句子</div>
+        <div style="font-size:14px;color:#334155;margin-bottom:12px;white-space:pre-wrap;">${escapeHtml(rec.sentence || '')}</div>
+        <div style="font-size:13px;color:#64748b;margin-bottom:4px;">翻译</div>
+        <div style="font-size:14px;color:#0f172a;margin-bottom:12px;white-space:pre-wrap;">${escapeHtml(rec.translation || '（无）')}</div>
+        ${rec.ai_word_sense ? `<div style="font-size:13px;color:#64748b;margin-bottom:4px;">词义</div><div style="font-size:14px;margin-bottom:12px;white-space:pre-wrap;">${escapeHtml(rec.ai_word_sense)}</div>` : ''}
+        ${rec.ai_sentence_gloss ? `<div style="font-size:13px;color:#64748b;margin-bottom:4px;">句意</div><div style="font-size:14px;margin-bottom:12px;white-space:pre-wrap;">${escapeHtml(rec.ai_sentence_gloss)}</div>` : ''}
+        <div style="font-size:11px;color:#94a3b8;word-break:break-all;">${escapeHtml(rec.source_url || '')}</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+        <button type="button" data-act="save" style="min-height:44px;padding:10px 14px;border:none;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer;font-size:14px;">存词</button>
+        <button type="button" data-act="requery" style="min-height:44px;padding:10px 14px;border:none;border-radius:8px;background:#7c3aed;color:#fff;cursor:pointer;font-size:14px;">再查一次</button>
+      </div>
+    `;
+    panel.appendChild(body);
+
+    body.addEventListener('click', async (ev) => {
+      const act = ev.target && ev.target.getAttribute && ev.target.getAttribute('data-act');
+      if (act === 'save') {
+        createLocalEntry({
+          word: rec.word,
+          sentence: rec.sentence || rec.word,
+          source_url: rec.source_url || location.href,
+          status: (rec.ai_word_sense || rec.ai_sentence_gloss) ? 'ready' : 'pending_ai',
+        });
+        // If senses exist, patch the newest entry
+        if (rec.ai_word_sense || rec.ai_sentence_gloss) {
+          const list = loadEntries();
+          if (list[0] && list[0].word === rec.word) {
+            patchLocalEntry(list[0].id, {
+              ai_word_sense: rec.ai_word_sense || null,
+              ai_sentence_gloss: rec.ai_sentence_gloss || null,
+              status: 'ready',
+            });
+          }
+        }
+        toast('已存入生词本：' + rec.word);
+        return;
+      }
+      if (act === 'requery') {
+        if (!hasLlmConfig()) {
+          toast('请先配置 DeepSeek');
+          showLlmSettingsPanel();
+          return;
+        }
+        toast('重新查询中…');
+        try {
+          const { record } = await runTranslateLookup({
+            word: rec.word,
+            sentence: rec.sentence || rec.word,
+            source_url: rec.source_url || location.href,
+            forceRefresh: true,
+          });
+          toast('已更新缓存');
+          showQueryDetail(record);
+        } catch (e) {
+          toast('再查失败：' + (e.message || String(e)));
+        }
+      }
+    });
+
+    document.documentElement.appendChild(panel);
+  }
+
     function showLocalPanel() {
     hidePanel();
     const entries = loadEntries();
@@ -826,6 +1261,24 @@
     });
     configBtn.onclick = () => showLlmSettingsPanel();
     headerActions.appendChild(configBtn);
+
+    const histBtn = document.createElement('button');
+    histBtn.type = 'button';
+    histBtn.textContent = '查询记录';
+    Object.assign(histBtn.style, {
+      minHeight: '40px',
+      padding: '8px 10px',
+      border: 'none',
+      borderRadius: '8px',
+      background: '#2563eb',
+      color: '#fff',
+      cursor: 'pointer',
+      fontSize: '13px',
+      whiteSpace: 'nowrap',
+      touchAction: 'manipulation',
+    });
+    histBtn.onclick = () => showQueryHistoryPanel();
+    headerActions.appendChild(histBtn);
 
     const closeBtn = document.createElement('button');
     closeBtn.type = 'button';
@@ -1087,51 +1540,158 @@
     }
   }
 
-  async function doTranslate() {
-    const text = lastSel.text || lastSel.sentence;
+  function formatCacheResult(rec) {
+    if (!rec) return '';
+    const parts = [];
+    if (rec.translation) parts.push(rec.translation);
+    if (rec.ai_word_sense) parts.push('词义：' + rec.ai_word_sense);
+    if (rec.ai_sentence_gloss) parts.push('句意：' + rec.ai_sentence_gloss);
+    return parts.join('\n') || '';
+  }
+
+  /**
+   * Lightweight translate lookup with cache + in-flight dedupe.
+   * Does not set global busy. Caller must check selectionGen / reqId for stale.
+   */
+  async function runTranslateLookup({ word, sentence, source_url, forceRefresh }) {
+    const text = word || sentence;
+    if (!text) throw new Error('没有可翻译文本');
+    const cacheKey = makeCacheKey(word, sentence);
+    if (!forceRefresh) {
+      const hit = getCachedByKey(cacheKey);
+      if (hit && hit.translation) {
+        return { record: hit, fromCache: true };
+      }
+    }
+    if (!forceRefresh && inFlightByCacheKey.has(cacheKey)) {
+      const record = await inFlightByCacheKey.get(cacheKey);
+      return { record, fromCache: false, piggyback: true };
+    }
+
+    const work = (async () => {
+      let translation = '';
+      if (hasLlmConfig()) {
+        translation = await callLlmTranslate(text);
+      } else if (hasOptionalApi()) {
+        try {
+          const { data } = await gmFetch(getApiUrl() + '/translate', {
+            method: 'POST',
+            headers: authHeaders(),
+            body: { text },
+          });
+          translation = data.translation || '';
+        } catch (e) {
+          translation = clientStubTranslate(text);
+        }
+      } else {
+        translation = clientStubTranslate(text);
+      }
+      return upsertQueryCache({
+        word,
+        sentence: sentence || word,
+        translation: translation || '',
+        source_url: source_url || location.href,
+        cacheKey,
+      });
+    })();
+
+    inFlightByCacheKey.set(cacheKey, work);
+    try {
+      const record = await work;
+      return { record, fromCache: false };
+    } finally {
+      inFlightByCacheKey.delete(cacheKey);
+    }
+  }
+
+  async function doTranslate(opts) {
+    const forceRefresh = !!(opts && opts.forceRefresh);
+    const word = lastSel.text;
+    const sentence = lastSel.sentence || lastSel.text;
+    const reqId = selectionGen;
+    const text = word || sentence;
     if (!text) {
-      toast('没有可翻译文本');
-      hidePopup();
+      setPopupResult('没有可翻译文本', 'error');
       return;
     }
 
-    // Prefer the configured DeepSeek key over the optional Sensebook server.
-    if (hasLlmConfig()) {
-      busy = true;
-      setPopupLoading('DeepSeek 翻译中…');
-      try {
-        const translation = await callLlmTranslate(text);
-        toast(translation || '(空)');
-      } catch (e) {
-        toast('DeepSeek 翻译失败：' + (e.message || String(e)));
-      } finally {
-        busy = false;
-        hidePopup();
+    if (!hasLlmConfig() && !hasOptionalApi()) {
+      const stub = clientStubTranslate(text);
+      setPopupResult(stub, 'hint');
+      toast('请先配置 DeepSeek');
+      return;
+    }
+
+    if (!forceRefresh) {
+      const hit = getCachedByKey(makeCacheKey(word, sentence));
+      if (hit && hit.translation) {
+        setPopupResult((hit.translation || '') + '\n（缓存）', 'cache');
+      } else {
+        setPopupResult('查询中…', 'loading');
       }
+    } else {
+      setPopupResult('查询中…', 'loading');
+    }
+
+    try {
+      const { record, fromCache } = await runTranslateLookup({
+        word,
+        sentence,
+        source_url: location.href,
+        forceRefresh,
+      });
+      if (reqId !== selectionGen) return; // stale
+      const body = formatCacheResult(record) || '(空)';
+      setPopupResult(fromCache ? body + '\n（缓存）' : body, fromCache ? 'cache' : 'ok');
+    } catch (e) {
+      if (reqId !== selectionGen) return;
+      setPopupResult('翻译失败：' + (e.message || String(e)), 'error');
+    }
+  }
+
+  function scheduleAutoQuery(reqId) {
+    if (autoQueryTimer) {
+      clearTimeout(autoQueryTimer);
+      autoQueryTimer = null;
+    }
+    if (!isAutoQueryEnabled()) return;
+    const word = lastSel.text;
+    const sentence = lastSel.sentence || lastSel.text;
+    if (!word) return;
+
+    const cacheKey = makeCacheKey(word, sentence);
+    const hit = getCachedByKey(cacheKey);
+    if (hit && hit.translation) {
+      setPopupResult(formatCacheResult(hit) + '\n（缓存）', 'cache');
+      // still allow silent refresh? Spec: show instantly; still allow refresh via 翻译
       return;
     }
 
-    // Fall back to the optional Sensebook server only when DeepSeek is not configured.
-    if (hasOptionalApi()) {
+    if (!hasLlmConfig()) {
+      setPopupResult('已配置自动查询，请先点「DeepSeek」填写 API Key', 'hint');
+      return;
+    }
+
+    setPopupResult('查询中…', 'loading');
+    autoQueryTimer = setTimeout(async () => {
+      autoQueryTimer = null;
+      if (reqId !== selectionGen) return;
       try {
-        const { data } = await gmFetch(getApiUrl() + '/translate', {
-          method: 'POST',
-          headers: authHeaders(),
-          body: { text },
+        const { record, fromCache } = await runTranslateLookup({
+          word,
+          sentence,
+          source_url: location.href,
+          forceRefresh: false,
         });
-        toast(data.translation || '(空)');
-        hidePopup();
-        return;
+        if (reqId !== selectionGen) return;
+        const body = formatCacheResult(record) || '(空)';
+        setPopupResult(fromCache ? body + '\n（缓存）' : body, fromCache ? 'cache' : 'ok');
+        if (lastSel.rect) repositionPopup(lastSel.rect);
       } catch (e) {
-        toast(e.message + ' · 已回退本地占位');
-        setTimeout(() => toast(clientStubTranslate(text)), 400);
-        hidePopup();
-        return;
+        if (reqId !== selectionGen) return;
+        setPopupResult('自动查询失败：' + (e.message || String(e)), 'error');
       }
-    }
-
-    toast(clientStubTranslate(text));
-    hidePopup();
+    }, AUTO_QUERY_DEBOUNCE_MS);
   }
 
   async function doSave(enrich) {
@@ -1167,6 +1727,7 @@
       }
 
       // AI 释义 path
+      const reqId = selectionGen;
       busy = true;
       setPopupLoading(hasLlmConfig() ? 'AI 释义中…' : '生成 stub 释义…');
 
@@ -1184,6 +1745,21 @@
           ai_word_sense: result.ai_word_sense,
           status: 'ready',
         });
+        upsertQueryCache({
+          word,
+          sentence,
+          source_url,
+          ai_word_sense: result.ai_word_sense,
+          ai_sentence_gloss: result.ai_sentence_gloss,
+          translation: result.ai_word_sense || result.ai_sentence_gloss || '',
+        });
+        if (reqId === selectionGen && popup) {
+          setPopupResult(formatCacheResult({
+            translation: result.ai_word_sense || '',
+            ai_word_sense: result.ai_word_sense,
+            ai_sentence_gloss: result.ai_sentence_gloss,
+          }), 'ok');
+        }
 
         if (hasOptionalApi()) {
           try {
@@ -1224,7 +1800,8 @@
   }
 
   function onSelectionChange() {
-    if (busy) return;
+    // Do not gate on busy — auto-query / parallel lookups must allow new selection
+    // (stale responses discarded via selectionGen).
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) {
       return;
@@ -1234,15 +1811,27 @@
       hidePopup();
       return;
     }
+    // Ignore selections inside Sensebook UI
+    try {
+      const node = sel.anchorNode;
+      const el = node && (node.nodeType === 3 ? node.parentElement : node);
+      if (el && el.closest && el.closest('#sensebook-popup, #sensebook-panel, #sensebook-fab-root, #sensebook-llm-settings-host')) {
+        return;
+      }
+    } catch { /* ignore */ }
+
     const range = sel.getRangeAt(0);
     const rect = range.getBoundingClientRect();
     if (!rect.width && !rect.height) return;
+    selectionGen += 1;
+    const reqId = selectionGen;
     lastSel = {
       text,
       sentence: extractSentence(range),
       rect,
     };
     showPopup(rect);
+    scheduleAutoQuery(reqId);
   }
 
   document.addEventListener('mouseup', () => {
@@ -1254,14 +1843,18 @@
 
   document.addEventListener('mousedown', (e) => {
     if (llmPanelHost && eventInsideLlmSettings(e)) return;
-    if (busy) return;
-    if (popup && !popup.contains(e.target)) hidePopup();
+    if (popup && !popup.contains(e.target)) {
+      // Allow dismissing popup even while a background request is in flight
+      hidePopup();
+      selectionGen += 1; // invalidate in-flight auto results for UI
+    }
     if (panel && !panel.contains(e.target) && !(popup && popup.contains(e.target))) {
       /* keep panel open unless closed explicitly */
     }
   });
   document.addEventListener('scroll', () => {
-    if (!busy) hidePopup();
+    hidePopup();
+    selectionGen += 1;
   }, true);
 
   function hideFabSheet() {
@@ -1302,7 +1895,7 @@
       display: 'none',
       flexDirection: 'column',
       gap: '6px',
-      width: '160px',
+      width: '180px',
       padding: '8px',
       background: '#fff',
       border: '1px solid #e2e8f0',
@@ -1337,6 +1930,26 @@
     };
     fabSheet.appendChild(makeAction('DeepSeek 设置', showLlmSettingsPanel, '#7c3aed'));
     fabSheet.appendChild(makeAction('我的生词', showLocalPanel, '#0f766e'));
+    fabSheet.appendChild(makeAction('查询记录', () => showQueryHistoryPanel(), '#2563eb'));
+    fabSheet.appendChild(makeAction(
+      isAutoQueryEnabled() ? '自动查询：开' : '自动查询：关',
+      () => {
+        setAutoQueryEnabled(!isAutoQueryEnabled());
+        toast(isAutoQueryEnabled() ? '已开启选中自动查询' : '已关闭选中自动查询');
+        // rebuild sheet labels next open
+        try {
+          if (fabSheet) {
+            fabSheet.remove();
+            fabSheet = null;
+          }
+          if (fabRoot) fabRoot.remove();
+          fabRoot = null;
+          fabButton = null;
+          setupFab();
+        } catch { /* ignore */ }
+      },
+      '#475569'
+    ));
 
     fabButton = document.createElement('button');
     fabButton.type = 'button';
@@ -1420,6 +2033,9 @@
     try {
       gmMenu('Sensebook：我的生词（本地）', () => {
         showLocalPanel();
+      });
+      gmMenu('Sensebook：查询记录', () => {
+        showQueryHistoryPanel();
       });
       gmMenu('Sensebook：LLM 设置', () => {
         showLlmSettingsPanel();
