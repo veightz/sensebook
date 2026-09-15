@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609151644
+// @version      0.1.202609151649
 // @description  划词翻译 / 存词 / AI 释义 — Sensebook（本地优先；DeepSeek LLM 设置面板）
 // @author       Sensebook
 // @match        *://*/*
@@ -27,6 +27,7 @@
   const LLM_BASE_URL_KEY = 'sensebook_llm_base_url';
   const LLM_API_KEY_KEY = 'sensebook_llm_api_key';
   const LLM_MODEL_KEY = 'sensebook_llm_model';
+  const ONBOARDING_DONE_KEY = 'sensebook_onboarding_done';
 
   const DEFAULT_LLM_BASE_URL = 'https://api.deepseek.com/v1';
   const DEFAULT_LLM_MODEL = 'deepseek-flash';
@@ -239,6 +240,7 @@
   let busy = false;
   let fabRoot = null;
   let fabSheet = null;
+  let fabButton = null;
 
   function toast(msg) {
     let el = document.getElementById('sensebook-toast');
@@ -403,6 +405,7 @@
   }
 
   function hideLlmSettingsPanel() {
+    storeSet(ONBOARDING_DONE_KEY, true);
     if (llmPanelHost) {
       llmPanelHost.remove();
       llmPanelHost = null;
@@ -597,6 +600,8 @@
       storeSet(LLM_BASE_URL_KEY, base || DEFAULT_LLM_BASE_URL);
       storeSet(LLM_API_KEY_KEY, key);
       storeSet(LLM_MODEL_KEY, model || DEFAULT_LLM_MODEL);
+      storeSet(ONBOARDING_DONE_KEY, true);
+      updateFabState();
       // Reflect defaults in fields if user cleared
       if (!base) baseInput.value = DEFAULT_LLM_BASE_URL;
       if (!model) modelInput.value = DEFAULT_LLM_MODEL;
@@ -607,6 +612,7 @@
 
     $('clearKey').onclick = () => {
       storeSet(LLM_API_KEY_KEY, '');
+      updateFabState();
       keyInput.value = '';
       keyStatus.textContent = '当前：' + maskApiKey('');
       setStatus('已清除 API Key（Base URL / 模型保留）', 'ok');
@@ -1159,7 +1165,7 @@
       position: 'fixed',
       right: '14px',
       bottom: 'max(14px, env(safe-area-inset-bottom))',
-      zIndex: '2147483645',
+      zIndex: '2147483647',
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'flex-end',
@@ -1209,11 +1215,9 @@
     fabSheet.appendChild(makeAction('DeepSeek 设置', showLlmSettingsPanel, '#7c3aed'));
     fabSheet.appendChild(makeAction('我的生词', showLocalPanel, '#0f766e'));
 
-    const fabButton = document.createElement('button');
+    fabButton = document.createElement('button');
     fabButton.type = 'button';
-    fabButton.textContent = 'Sensebook';
     fabButton.setAttribute('data-sensebook-fab', 'true');
-    fabButton.setAttribute('aria-label', '打开 Sensebook 快捷菜单');
     fabButton.setAttribute('aria-expanded', 'false');
     Object.assign(fabButton.style, {
       minWidth: '112px',
@@ -1221,7 +1225,7 @@
       padding: '10px 14px',
       border: 'none',
       borderRadius: '999px',
-      background: '#0f172a',
+      background: '#7c3aed',
       color: '#fff',
       boxShadow: '0 4px 16px rgba(15,23,42,.28)',
       fontSize: '13px',
@@ -1232,12 +1236,30 @@
     fabButton.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      showFabSheet();
+      if (hasLlmConfig()) {
+        showFabSheet();
+      } else {
+        showLlmSettingsPanel();
+      }
     });
+    updateFabState();
 
     fabRoot.appendChild(fabSheet);
     fabRoot.appendChild(fabButton);
-    document.documentElement.appendChild(fabRoot);
+    const mount = document.documentElement || document.body;
+    if (mount) mount.appendChild(fabRoot);
+  }
+
+  function updateFabState() {
+    if (!fabButton) return;
+    const configured = hasLlmConfig();
+    fabButton.textContent = configured ? 'Sensebook' : '配置 DeepSeek';
+    fabButton.style.background = configured ? '#0f172a' : '#7c3aed';
+    fabButton.setAttribute(
+      'aria-label',
+      configured ? '打开 Sensebook 快捷菜单' : '配置 DeepSeek API Key'
+    );
+    fabButton.title = configured ? '打开 Sensebook 快捷菜单' : '配置 DeepSeek API Key';
   }
 
   document.addEventListener('mousedown', (e) => {
@@ -1246,7 +1268,22 @@
     }
   });
 
-  setupFab();
+  function setupFabAndOnboarding() {
+    setupFab();
+    if (!hasLlmConfig() && !storeGet(ONBOARDING_DONE_KEY, false)) {
+      setTimeout(() => {
+        if (hasLlmConfig() || storeGet(ONBOARDING_DONE_KEY, false)) return;
+        showLlmSettingsPanel();
+        toast('请配置 DeepSeek API Key');
+      }, 600);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupFabAndOnboarding, { once: true });
+  } else {
+    setupFabAndOnboarding();
+  }
 
   // Expose parse helpers for optional page-console smoke (no export in userscript)
   try {
