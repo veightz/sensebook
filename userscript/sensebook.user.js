@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609151730
+// @version      0.1.202609151754
 // @description  划词翻译 / 存词 / AI 释义 — Sensebook（本地优先；DeepSeek LLM 设置面板）
 // @author       Sensebook
 // @match        *://*/*
@@ -254,7 +254,7 @@
   }
 
   function clientStubTranslate(text) {
-    return `[本地翻译占位] ${text}\n（未配置 DeepSeek Key 或可选同步 API。菜单「LLM 设置」可填写 Key，或配置登录/同步）`;
+    return `[本地翻译占位] ${text}\n（请先点「配置 DeepSeek」填写 API Key）`;
   }
 
   function buildEnrichUserPrompt({ word, sentence, source_url }) {
@@ -280,6 +280,19 @@
       ai_sentence_gloss: String(obj.ai_sentence_gloss ?? '').trim(),
       ai_word_sense: String(obj.ai_word_sense ?? '').trim(),
     };
+  }
+
+  function parseTranslationContent(content) {
+    if (content == null) throw new Error('LLM 返回空内容');
+    let text = String(content).trim();
+    const fence = text.match(/^```(?:json|text)?\s*([\s\S]*?)```$/i);
+    if (fence) text = fence[1].trim();
+    try {
+      const obj = JSON.parse(text);
+      if (obj && typeof obj.translation === 'string') return obj.translation.trim();
+    } catch { /* plain-text translation is also valid */ }
+    if (!text) throw new Error('LLM 返回空译文');
+    return text;
   }
 
   // Menus + FAB boot run at end (after function decls); safe gmMenu never aborts IIFE.
@@ -964,7 +977,7 @@
    * Call OpenAI-compatible /chat/completions via GM_xmlhttpRequest.
    * Prefer response_format json_object; retry without if provider rejects.
    */
-  async function callLlmChatCompletions(messages) {
+  async function callLlmChatCompletions(messages, parseContent = parseEnrichJson, { jsonResponse = true } = {}) {
     const base = getLlmBaseUrl();
     const key = getLlmApiKey();
     const model = getLlmModel();
@@ -973,18 +986,17 @@
 
     const url = base + '/chat/completions';
     const headers = { Authorization: 'Bearer ' + key };
-
-    const bodyWithFormat = {
+    const body = {
       model,
       temperature: 0.2,
-      response_format: { type: 'json_object' },
+      ...(jsonResponse ? { response_format: { type: 'json_object' } } : {}),
       messages,
     };
 
-    let res = await gmRequest(url, { method: 'POST', headers, body: bodyWithFormat });
+    let res = await gmRequest(url, { method: 'POST', headers, body });
 
     // Some providers reject response_format — retry without
-    if (res.status >= 400) {
+    if (jsonResponse && res.status >= 400) {
       const errText = (res.raw || '') + JSON.stringify(res.data || {});
       const formatRejected =
         /response_format|json_object|unsupported|unknown.?param|invalid/i.test(errText);
@@ -1006,7 +1018,7 @@
     }
 
     const content = res.data?.choices?.[0]?.message?.content;
-    return parseEnrichJson(content);
+    return parseContent(content);
   }
 
   async function callLlmEnrich({ word, sentence, source_url }) {
@@ -1014,6 +1026,14 @@
       { role: 'system', content: ENRICH_SYSTEM_PROMPT },
       { role: 'user', content: buildEnrichUserPrompt({ word, sentence, source_url }) },
     ]);
+  }
+
+
+  async function callLlmTranslate(text) {
+    return callLlmChatCompletions([
+      { role: 'system', content: '你是简洁、准确的中文翻译助手。只输出中文译文，不要解释。' },
+      { role: 'user', content: `请将下面文本翻译成自然的中文：\n${text}` },
+    ], parseTranslationContent, { jsonResponse: false });
   }
 
   /** Enrich one entry: real LLM if key set, else stub. */
@@ -1069,7 +1089,29 @@
 
   async function doTranslate() {
     const text = lastSel.text || lastSel.sentence;
-    // Prefer optional Sensebook server translate if configured
+    if (!text) {
+      toast('没有可翻译文本');
+      hidePopup();
+      return;
+    }
+
+    // Prefer the configured DeepSeek key over the optional Sensebook server.
+    if (hasLlmConfig()) {
+      busy = true;
+      setPopupLoading('DeepSeek 翻译中…');
+      try {
+        const translation = await callLlmTranslate(text);
+        toast(translation || '(空)');
+      } catch (e) {
+        toast('DeepSeek 翻译失败：' + (e.message || String(e)));
+      } finally {
+        busy = false;
+        hidePopup();
+      }
+      return;
+    }
+
+    // Fall back to the optional Sensebook server only when DeepSeek is not configured.
     if (hasOptionalApi()) {
       try {
         const { data } = await gmFetch(getApiUrl() + '/translate', {
@@ -1087,6 +1129,7 @@
         return;
       }
     }
+
     toast(clientStubTranslate(text));
     hidePopup();
   }
@@ -1162,7 +1205,7 @@
         } else {
           toast(
             (result.stub
-              ? '已本地存词并生成 stub 释义（菜单「LLM 设置」可填 Key）：'
+              ? '已本地存词并生成 stub 释义（请先点「配置 DeepSeek」填写 API Key）：'
               : '已本地存词并 AI 释义：') + entry.word
           );
         }
