@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sensebook 划词
 // @namespace    https://github.com/veightz/sensebook
-// @version      0.4.0
+// @version      0.4.1
 // @description  划词翻译 / 存词 / AI 释义 — Sensebook（本地优先；DeepSeek LLM 设置面板）
 // @author       Sensebook
 // @match        *://*/*
@@ -321,6 +321,9 @@
       display: 'flex',
       gap: '6px',
       padding: '6px',
+      flexWrap: 'wrap',
+      maxWidth: 'calc(100vw - 16px)',
+      boxSizing: 'border-box',
       background: '#fff',
       borderRadius: '10px',
       boxShadow: '0 4px 20px rgba(0,0,0,.18)',
@@ -357,6 +360,7 @@
     popup.appendChild(mkBtn('翻译', () => doTranslate()));
     popup.appendChild(mkBtn('存词', () => doSave(false)));
     popup.appendChild(mkBtn('AI释义', () => doSave(true), '#7c3aed'));
+    popup.appendChild(mkBtn('设置', () => { hidePopup(); showLlmSettingsPanel(); }, '#475569'));
     popup.appendChild(mkBtn('生词', () => { hidePopup(); showLocalPanel(); }, '#0f766e'));
 
     document.documentElement.appendChild(popup);
