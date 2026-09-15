@@ -6,6 +6,18 @@
 
 本仓库为本地 MVP 脚手架：Tampermonkey 用户脚本（主路径）+ 可选 Node/Hono/SQLite 后端。无 Android 应用。
 
+
+## 安装油猴脚本（一次安装，之后自动更新）
+
+1. 浏览器安装 [Tampermonkey](https://www.tampermonkey.net/) 或 Violentmonkey  
+2. 打开安装链接（公开仓库 raw）：  
+   https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js  
+   油猴会弹出安装页，确认安装即可。  
+3. 之后每次我们提高 `@version` 并推到 `main`，油猴会按 `@updateURL` 检查更新（也可在插件里手动「检查更新」）。  
+4. 划词弹层点 **设置**，填 DeepSeek API Key。
+
+本地开发若已手动粘贴过旧脚本：删掉旧脚本后改用上面的链接重装，才能挂上自动更新。
+
 ## 最快上手（仅油猴，无需后端）
 
 1. 安装 [Tampermonkey](https://www.tampermonkey.net/)。
