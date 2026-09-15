@@ -1,0 +1,23 @@
+{
+  "name": "sensebook",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sensebook — browser-first 划词 vocab tool",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch server/index.js",
+    "start": "node server/index.js",
+    "db:init": "node server/db.js --init"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.8",
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.8.1",
+    "dotenv": "^16.4.7",
+    "hono": "^4.7.2",
+    "jose": "^5.9.6"
+  }
+}

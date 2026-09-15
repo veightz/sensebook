@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sensebook — 词库</title>
+  <style>
+    :root {
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      color: #1a1a1a;
+      background: #f6f7f9;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 16px; max-width: 720px; margin-inline: auto; }
+    h1 { font-size: 1.4rem; margin: 0 0 8px; }
+    .muted { color: #666; font-size: 0.9rem; }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 16px;
+      margin: 12px 0;
+      box-shadow: 0 1px 3px rgba(0,0,0,.08);
+    }
+    label { display: block; font-size: 0.85rem; margin: 8px 0 4px; }
+    input {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #ccd;
+      border-radius: 8px;
+      font-size: 16px;
+    }
+    button {
+      margin-top: 10px;
+      margin-right: 8px;
+      padding: 10px 16px;
+      min-height: 44px;
+      border: none;
+      border-radius: 8px;
+      background: #2563eb;
+      color: #fff;
+      font-size: 15px;
+      cursor: pointer;
+    }
+    button.secondary { background: #64748b; }
+    button.danger { background: #dc2626; }
+    .word { font-weight: 700; font-size: 1.1rem; }
+    .sentence { margin: 6px 0; color: #333; }
+    .gloss { font-size: 0.9rem; color: #444; margin-top: 6px; }
+    .meta { font-size: 0.75rem; color: #888; margin-top: 8px; }
+    .status {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      background: #e2e8f0;
+    }
+    .status.ready { background: #bbf7d0; }
+    .status.failed { background: #fecaca; }
+    .status.pending_ai { background: #fef08a; }
+    #msg { min-height: 1.2em; color: #b91c1c; font-size: 0.9rem; }
+    #auth-box.hidden, #list-box.hidden { display: none; }
+  </style>
+</head>
+<body>
+  <h1>Sensebook</h1>
+  <p class="muted">浏览器划词词库 · 本地 MVP</p>
+  <p id="msg"></p>
+
+  <div id="auth-box" class="card">
+    <h2 style="margin:0;font-size:1.1rem;">登录 / 注册</h2>
+    <label>邮箱</label>
+    <input id="email" type="email" autocomplete="username" placeholder="you@example.com" />
+    <label>密码（至少 6 位）</label>
+    <input id="password" type="password" autocomplete="current-password" />
+    <button type="button" id="btn-login">登录</button>
+    <button type="button" class="secondary" id="btn-register">注册</button>
+  </div>
+
+  <div id="list-box" class="hidden">
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+      <span id="user-label" class="muted"></span>
+      <div>
+        <button type="button" class="secondary" id="btn-refresh">刷新</button>
+        <button type="button" class="danger" id="btn-logout">退出</button>
+      </div>
+    </div>
+    <div id="entries"></div>
+  </div>
+
+  <script>
+    const API = location.origin;
+    const $ = (id) => document.getElementById(id);
+    const msg = (t) => { $('msg').textContent = t || ''; };
+
+    function token() { return localStorage.getItem('sensebook_token'); }
+    function setAuth(t, email) {
+      if (t) localStorage.setItem('sensebook_token', t);
+      if (email) localStorage.setItem('sensebook_email', email);
+    }
+    function clearAuth() {
+      localStorage.removeItem('sensebook_token');
+      localStorage.removeItem('sensebook_email');
+    }
+
+    async function api(path, opts = {}) {
+      const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+      if (token()) headers.Authorization = 'Bearer ' + token();
+      const res = await fetch(API + path, { ...opts, headers });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    }
+
+    function showLoggedIn() {
+      $('auth-box').classList.add('hidden');
+      $('list-box').classList.remove('hidden');
+      $('user-label').textContent = localStorage.getItem('sensebook_email') || '已登录';
+      loadEntries();
+    }
+    function showLoggedOut() {
+      $('auth-box').classList.remove('hidden');
+      $('list-box').classList.add('hidden');
+      $('entries').innerHTML = '';
+    }
+
+    async function auth(path) {
+      msg('');
+      try {
+        const data = await api(path, {
+          method: 'POST',
+          body: JSON.stringify({
+            email: $('email').value.trim(),
+            password: $('password').value,
+          }),
+        });
+        setAuth(data.token, data.user.email);
+        showLoggedIn();
+      } catch (e) {
+        msg(e.message);
+      }
+    }
+
+    async function loadEntries() {
+      msg('');
+      try {
+        const { entries } = await api('/entries');
+        const box = $('entries');
+        if (!entries.length) {
+          box.innerHTML = '<div class="card muted">暂无词条。在网页划词后用油猴脚本「存词」。</div>';
+          return;
+        }
+        box.innerHTML = entries.map((e) => `
+          <div class="card" data-id="${e.id}">
+            <div class="word">${escapeHtml(e.word)}
+              <span class="status ${e.status}">${e.status}</span>
+            </div>
+            <div class="sentence">${escapeHtml(e.sentence)}</div>
+            ${e.ai_word_sense ? `<div class="gloss"><strong>词义：</strong>${escapeHtml(e.ai_word_sense)}</div>` : ''}
+            ${e.ai_sentence_gloss ? `<div class="gloss"><strong>句意：</strong>${escapeHtml(e.ai_sentence_gloss)}</div>` : ''}
+            <div class="meta">
+              ${e.source_url ? `<a href="${escapeAttr(e.source_url)}" target="_blank" rel="noopener">来源</a> · ` : ''}
+              ${escapeHtml(e.created_at)}
+            </div>
+            <button type="button" data-enrich="${e.id}">AI 释义</button>
+            <button type="button" class="danger" data-del="${e.id}">删除</button>
+          </div>
+        `).join('');
+      } catch (e) {
+        msg(e.message);
+        if (e.message.includes('未登录') || e.message.includes('用户')) {
+          clearAuth();
+          showLoggedOut();
+        }
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+    }
+    function escapeAttr(s) {
+      return escapeHtml(s).replace(/`/g, '');
+    }
+
+    $('btn-login').onclick = () => auth('/auth/login');
+    $('btn-register').onclick = () => auth('/auth/register');
+    $('btn-logout').onclick = () => { clearAuth(); showLoggedOut(); };
+    $('btn-refresh').onclick = () => loadEntries();
+
+    $('entries').addEventListener('click', async (ev) => {
+      const enrichId = ev.target.getAttribute('data-enrich');
+      const delId = ev.target.getAttribute('data-del');
+      if (enrichId) {
+        try {
+          msg('正在生成释义…');
+          await api('/entries/' + enrichId + '/enrich', { method: 'POST', body: '{}' });
+          msg('');
+          loadEntries();
+        } catch (e) { msg(e.message); }
+      }
+      if (delId) {
+        if (!confirm('确认删除？')) return;
+        try {
+          await api('/entries/' + delId, { method: 'DELETE' });
+          loadEntries();
+        } catch (e) { msg(e.message); }
+      }
+    });
+
+    if (token()) showLoggedIn();
+    else showLoggedOut();
+  </script>
+</body>
+</html>
