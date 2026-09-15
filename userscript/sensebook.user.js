@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Sensebook 划词
 // @namespace    https://github.com/veightz/sensebook
-// @version      0.2.0
-// @description  划词翻译 / 存词 / AI 释义 — Sensebook（本地优先，可不登录）
+// @version      0.3.0
+// @description  划词翻译 / 存词 / AI 释义 — Sensebook（本地优先，可不登录；可选直连 LLM）
 // @author       Sensebook
 // @match        *://*/*
 // @grant        GM_getValue
@@ -21,6 +21,18 @@
   const ENTRIES_KEY = 'sensebook_entries';
   const API_URL_KEY = 'sensebook_api_url';
   const TOKEN_KEY = 'sensebook_token';
+  // LLM settings (local-only; separate from optional server sync)
+  const LLM_BASE_URL_KEY = 'sensebook_llm_base_url';
+  const LLM_API_KEY_KEY = 'sensebook_llm_api_key';
+  const LLM_MODEL_KEY = 'sensebook_llm_model';
+
+  const DEFAULT_LLM_BASE_URL = 'https://api.deepseek.com/v1';
+  const DEFAULT_LLM_MODEL = 'deepseek-chat';
+
+  const ENRICH_SYSTEM_PROMPT =
+    '你是简洁的语境词汇助教。根据用户给出的单词、句子与来源页，用中文解释。' +
+    '只输出 JSON 对象：{"ai_sentence_gloss":"整句中文释义（简洁）","ai_word_sense":"该词在此句中的中文义项（含词性/用法提示，简洁）"}。' +
+    '不要输出 Markdown 或其它文字。';
 
   // ---- storage helpers (GM_* with localStorage fallback) ----
   function storeGet(key, def) {
@@ -65,6 +77,28 @@
     return !!(getApiUrl() && getToken());
   }
 
+  function getLlmBaseUrl() {
+    const v = storeGet(LLM_BASE_URL_KEY, '');
+    const s = typeof v === 'string' ? v.trim() : '';
+    return (s || DEFAULT_LLM_BASE_URL).replace(/\/$/, '');
+  }
+
+  function getLlmApiKey() {
+    const v = storeGet(LLM_API_KEY_KEY, '');
+    return typeof v === 'string' ? v.trim() : '';
+  }
+
+  function getLlmModel() {
+    const v = storeGet(LLM_MODEL_KEY, '');
+    const s = typeof v === 'string' ? v.trim() : '';
+    return s || DEFAULT_LLM_MODEL;
+  }
+
+  /** True when user configured an API key (base URL has a usable default). */
+  function hasLlmConfig() {
+    return !!getLlmApiKey();
+  }
+
   function uuid() {
     if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -92,7 +126,16 @@
     storeSet(ENTRIES_KEY, list);
   }
 
-  function createLocalEntry({ word, sentence, source_url, enrich }) {
+  function patchLocalEntry(id, patch) {
+    const list = loadEntries();
+    const idx = list.findIndex((x) => x.id === id);
+    if (idx < 0) return null;
+    list[idx] = { ...list[idx], ...patch };
+    saveEntries(list);
+    return list[idx];
+  }
+
+  function createLocalEntry({ word, sentence, source_url, status }) {
     const now = new Date().toISOString();
     const entry = {
       id: uuid(),
@@ -102,15 +145,9 @@
       ai_word_sense: null,
       source_url: source_url || '',
       tags: [],
-      status: enrich ? 'ready' : 'pending_ai',
+      status: status || 'pending_ai',
       created_at: now,
     };
-    if (enrich) {
-      const stub = clientStubEnrich(entry.word, entry.sentence);
-      entry.ai_sentence_gloss = stub.ai_sentence_gloss;
-      entry.ai_word_sense = stub.ai_word_sense;
-      entry.status = 'ready';
-    }
     const list = loadEntries();
     list.unshift(entry);
     saveEntries(list);
@@ -120,17 +157,75 @@
   function clientStubEnrich(word, sentence) {
     return {
       ai_sentence_gloss: `[本地 stub] 句意占位：${(sentence || '').slice(0, 80)}`,
-      ai_word_sense: `[本地 stub] 「${word}」在句中的义项（未配置 API，仅占位）`,
+      ai_word_sense: `[本地 stub] 「${word}」在句中的义项（未配置 LLM API Key，仅占位）`,
     };
   }
 
   function clientStubTranslate(text) {
-    return `[本地翻译占位] ${text}\n（未配置 API，请在菜单「登录/同步（可选）」中填写地址与 Token 以启用在线翻译）`;
+    return `[本地翻译占位] ${text}\n（未配置 LLM 或可选同步 API。可在菜单填写「LLM API Key」直连释义，或配置登录/同步）`;
+  }
+
+  function buildEnrichUserPrompt({ word, sentence, source_url }) {
+    return [
+      `单词：${word || ''}`,
+      `句子：${sentence || ''}`,
+      `来源：${source_url || ''}`,
+    ].join('\n');
+  }
+
+  /**
+   * Parse LLM message content into enrich JSON.
+   * Strips optional markdown fences; validates required keys.
+   */
+  function parseEnrichJson(content) {
+    if (content == null) throw new Error('LLM 返回空内容');
+    let text = String(content).trim();
+    const fence = text.match(/^```(?:json)?\s*([\s\S]*?)```$/i);
+    if (fence) text = fence[1].trim();
+    const obj = JSON.parse(text);
+    if (!obj || typeof obj !== 'object') throw new Error('LLM JSON 无效');
+    return {
+      ai_sentence_gloss: String(obj.ai_sentence_gloss ?? '').trim(),
+      ai_word_sense: String(obj.ai_word_sense ?? '').trim(),
+    };
   }
 
   // ---- menus ----
   GM_registerMenuCommand('Sensebook：我的生词（本地）', () => {
     showLocalPanel();
+  });
+
+  GM_registerMenuCommand('Sensebook：LLM Base URL', () => {
+    const cur = storeGet(LLM_BASE_URL_KEY, '');
+    const v = prompt(
+      'LLM Base URL（OpenAI 兼容，本地保存）\n例如 DeepSeek：https://api.deepseek.com/v1\n或 OpenRouter：https://openrouter.ai/api/v1\n留空则使用默认 DeepSeek',
+      (typeof cur === 'string' && cur) || DEFAULT_LLM_BASE_URL
+    );
+    if (v != null) storeSet(LLM_BASE_URL_KEY, v.trim());
+  });
+
+  GM_registerMenuCommand('Sensebook：LLM API Key', () => {
+    const cur = getLlmApiKey();
+    const masked = cur ? cur.slice(0, 4) + '…' + cur.slice(-4) : '';
+    const v = prompt(
+      'LLM API Key（仅保存在本机油猴存储，不会上传 Sensebook 服务器）\nDeepSeek / OpenRouter / OpenAI 兼容均可\n当前：' + (masked || '未设置'),
+      cur
+    );
+    if (v != null) storeSet(LLM_API_KEY_KEY, v.trim());
+  });
+
+  GM_registerMenuCommand('Sensebook：LLM 模型', () => {
+    const cur = storeGet(LLM_MODEL_KEY, '');
+    const v = prompt(
+      'LLM 模型名\nDeepSeek 默认：deepseek-chat\n也可填 gpt-4o-mini 等（视供应商而定）',
+      (typeof cur === 'string' && cur) || DEFAULT_LLM_MODEL
+    );
+    if (v != null) storeSet(LLM_MODEL_KEY, v.trim());
+  });
+
+  GM_registerMenuCommand('Sensebook：清除 LLM API Key', () => {
+    storeSet(LLM_API_KEY_KEY, '');
+    toast('已清除 LLM API Key（本地词库不受影响）');
   });
 
   GM_registerMenuCommand('Sensebook：登录/同步（可选）— API 地址', () => {
@@ -157,12 +252,17 @@
   });
 
   GM_registerMenuCommand('Sensebook：关于本地模式', () => {
-    toast('默认本地优先：存词写入油猴存储，无需登录 / API');
+    toast(
+      hasLlmConfig()
+        ? '本地优先：存词在本机；已配置 LLM，AI 释义将直连模型'
+        : '默认本地优先：存词写入油猴存储。菜单填写 LLM API Key 后可真实 AI 释义'
+    );
   });
 
   let popup = null;
   let panel = null;
   let lastSel = { text: '', sentence: '', rect: null };
+  let busy = false;
 
   function toast(msg) {
     let el = document.getElementById('sensebook-toast');
@@ -188,7 +288,7 @@
     el.textContent = msg;
     el.style.display = 'block';
     clearTimeout(el._t);
-    el._t = setTimeout(() => { el.style.display = 'none'; }, 2800);
+    el._t = setTimeout(() => { el.style.display = 'none'; }, 3200);
   }
 
   function extractSentence(range) {
@@ -221,6 +321,22 @@
       popup.remove();
       popup = null;
     }
+  }
+
+  function setPopupLoading(msg) {
+    if (!popup) return;
+    popup.innerHTML = '';
+    const span = document.createElement('div');
+    span.textContent = msg || 'AI 释义中…';
+    Object.assign(span.style, {
+      padding: '12px 16px',
+      fontSize: '14px',
+      color: '#4c1d95',
+      fontFamily: 'system-ui,sans-serif',
+      minWidth: '120px',
+      textAlign: 'center',
+    });
+    popup.appendChild(span);
   }
 
   function showPopup(rect) {
@@ -260,6 +376,7 @@
       b.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
+        if (busy) return;
         onClick();
       });
       return b;
@@ -327,9 +444,10 @@
       gap: '8px',
       flexShrink: '0',
     });
+    const llmHint = hasLlmConfig() ? 'LLM 已配置' : '未配置 LLM Key';
     header.innerHTML = `<div>
       <div style="font-weight:700;font-size:16px;">我的生词（本地）</div>
-      <div style="font-size:12px;color:#64748b;margin-top:2px;">无需登录 · 油猴/本地存储 · 共 ${entries.length} 条</div>
+      <div style="font-size:12px;color:#64748b;margin-top:2px;">无需登录 · ${llmHint} · 共 ${entries.length} 条</div>
     </div>`;
     const closeBtn = document.createElement('button');
     closeBtn.type = 'button';
@@ -376,33 +494,34 @@
     }
     panel.appendChild(body);
 
-    body.addEventListener('click', (ev) => {
+    body.addEventListener('click', async (ev) => {
       const enrichId = ev.target.getAttribute && ev.target.getAttribute('data-enrich-local');
       const delId = ev.target.getAttribute && ev.target.getAttribute('data-del-local');
       if (enrichId) {
+        if (busy) return;
         const list = loadEntries();
         const idx = list.findIndex((x) => x.id === enrichId);
-        if (idx >= 0) {
-          const stub = clientStubEnrich(list[idx].word, list[idx].sentence);
-          list[idx].ai_sentence_gloss = stub.ai_sentence_gloss;
-          list[idx].ai_word_sense = stub.ai_word_sense;
-          list[idx].status = 'ready';
-          // optional server enrich if configured
-          if (hasOptionalApi()) {
-            optionalServerEnrich(list[idx]).then((updated) => {
-              if (updated) {
-                const cur = loadEntries();
-                const i = cur.findIndex((x) => x.id === enrichId);
-                if (i >= 0) {
-                  cur[i] = { ...cur[i], ...updated, status: 'ready' };
-                  saveEntries(cur);
-                }
-                showLocalPanel();
-              }
-            }).catch(() => { /* keep stub */ });
+        if (idx < 0) return;
+        const entry = list[idx];
+        busy = true;
+        toast('AI 释义中…');
+        try {
+          const result = await enrichLocalEntry(entry);
+          patchLocalEntry(enrichId, {
+            ai_sentence_gloss: result.ai_sentence_gloss,
+            ai_word_sense: result.ai_word_sense,
+            status: 'ready',
+          });
+          toast(result.stub ? '已生成本地 stub 释义' : 'AI 释义完成');
+          // optional server mirror
+          if (hasOptionalApi() && !result.stub) {
+            optionalServerEnrich({ ...entry, ...result }).catch(() => {});
           }
-          saveEntries(list);
-          toast('已生成本地 AI 释义（stub）');
+        } catch (err) {
+          patchLocalEntry(enrichId, { status: 'failed' });
+          toast('AI 释义失败：' + (err.message || String(err)));
+        } finally {
+          busy = false;
           showLocalPanel();
         }
       }
@@ -430,10 +549,40 @@
         onload: (res) => {
           let data = {};
           try { data = JSON.parse(res.responseText); } catch { /* ignore */ }
-          if (res.status >= 200 && res.status < 300) resolve(data);
-          else reject(new Error(data.error || `HTTP ${res.status}`));
+          if (res.status >= 200 && res.status < 300) resolve({ data, status: res.status, raw: res.responseText });
+          else {
+            const err = new Error(
+              (data && (data.error || data.message)) ||
+                `HTTP ${res.status}`
+            );
+            err.status = res.status;
+            err.data = data;
+            err.raw = res.responseText;
+            reject(err);
+          }
         },
-        onerror: () => reject(new Error('网络错误，请检查 API 地址与 CORS')),
+        onerror: () => reject(new Error('网络错误，请检查地址与 @connect')),
+      });
+    });
+  }
+
+  /** Raw GM request that returns status even for error codes (for retry logic). */
+  function gmRequest(url, { method = 'GET', body, headers = {} } = {}) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method,
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          ...headers,
+        },
+        data: body ? JSON.stringify(body) : undefined,
+        onload: (res) => {
+          let data = null;
+          try { data = JSON.parse(res.responseText); } catch { /* ignore */ }
+          resolve({ status: res.status, data, raw: res.responseText });
+        },
+        onerror: () => reject(new Error('网络错误，请检查 LLM Base URL 与 @connect')),
       });
     });
   }
@@ -444,117 +593,228 @@
     return { Authorization: 'Bearer ' + t };
   }
 
+  /**
+   * Call OpenAI-compatible /chat/completions via GM_xmlhttpRequest.
+   * Prefer response_format json_object; retry without if provider rejects.
+   */
+  async function callLlmChatCompletions(messages) {
+    const base = getLlmBaseUrl();
+    const key = getLlmApiKey();
+    const model = getLlmModel();
+    if (!key) throw new Error('未配置 LLM API Key');
+    if (!base) throw new Error('未配置 LLM Base URL');
+
+    const url = base + '/chat/completions';
+    const headers = { Authorization: 'Bearer ' + key };
+
+    const bodyWithFormat = {
+      model,
+      temperature: 0.2,
+      response_format: { type: 'json_object' },
+      messages,
+    };
+
+    let res = await gmRequest(url, { method: 'POST', headers, body: bodyWithFormat });
+
+    // Some providers reject response_format — retry without
+    if (res.status >= 400) {
+      const errText = (res.raw || '') + JSON.stringify(res.data || {});
+      const formatRejected =
+        /response_format|json_object|unsupported|unknown.?param|invalid/i.test(errText);
+      if (formatRejected || res.status === 400) {
+        const bodyNoFormat = {
+          model,
+          temperature: 0.2,
+          messages,
+        };
+        res = await gmRequest(url, { method: 'POST', headers, body: bodyNoFormat });
+      }
+    }
+
+    if (res.status < 200 || res.status >= 300) {
+      const msg =
+        (res.data && (res.data.error?.message || res.data.error || res.data.message)) ||
+        `LLM HTTP ${res.status}`;
+      throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg).slice(0, 200));
+    }
+
+    const content = res.data?.choices?.[0]?.message?.content;
+    return parseEnrichJson(content);
+  }
+
+  async function callLlmEnrich({ word, sentence, source_url }) {
+    return callLlmChatCompletions([
+      { role: 'system', content: ENRICH_SYSTEM_PROMPT },
+      { role: 'user', content: buildEnrichUserPrompt({ word, sentence, source_url }) },
+    ]);
+  }
+
+  /** Enrich one entry: real LLM if key set, else stub. */
+  async function enrichLocalEntry(entry) {
+    if (!hasLlmConfig()) {
+      const stub = clientStubEnrich(entry.word, entry.sentence);
+      return { ...stub, stub: true };
+    }
+    const result = await callLlmEnrich({
+      word: entry.word,
+      sentence: entry.sentence,
+      source_url: entry.source_url,
+    });
+    return { ...result, stub: false };
+  }
+
   async function optionalServerEnrich(entry) {
     try {
-      // Prefer updating an existing server entry only if we have one synced; for local id, create then enrich
-      const created = await gmFetch(getApiUrl() + '/entries', {
+      const createdRes = await gmFetch(getApiUrl() + '/entries', {
         method: 'POST',
         headers: authHeaders(),
         body: {
           word: entry.word,
           sentence: entry.sentence,
           source_url: entry.source_url,
+          ai_sentence_gloss: entry.ai_sentence_gloss,
+          ai_word_sense: entry.ai_word_sense,
+          status: entry.status || 'ready',
         },
       });
-      if (created && created.id) {
-        const enriched = await gmFetch(getApiUrl() + '/entries/' + created.id + '/enrich', {
+      const created = createdRes.data;
+      if (created && created.id && !(entry.ai_sentence_gloss && entry.ai_word_sense)) {
+        const enrichedRes = await gmFetch(getApiUrl() + '/entries/' + created.id + '/enrich', {
           method: 'POST',
           headers: authHeaders(),
           body: {},
         });
+        const enriched = enrichedRes.data;
+        const ent = enriched.entry || enriched;
         return {
-          ai_sentence_gloss: enriched.ai_sentence_gloss || created.ai_sentence_gloss,
-          ai_word_sense: enriched.ai_word_sense || created.ai_word_sense,
+          ai_sentence_gloss: ent.ai_sentence_gloss || created.ai_sentence_gloss,
+          ai_word_sense: ent.ai_word_sense || created.ai_word_sense,
         };
       }
+      return {
+        ai_sentence_gloss: entry.ai_sentence_gloss || created.ai_sentence_gloss,
+        ai_word_sense: entry.ai_word_sense || created.ai_word_sense,
+      };
     } catch {
       return null;
     }
-    return null;
   }
 
   async function doTranslate() {
     const text = lastSel.text || lastSel.sentence;
-    if (!hasOptionalApi()) {
-      toast(clientStubTranslate(text));
-      hidePopup();
-      return;
+    // Prefer optional Sensebook server translate if configured
+    if (hasOptionalApi()) {
+      try {
+        const { data } = await gmFetch(getApiUrl() + '/translate', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: { text },
+        });
+        toast(data.translation || '(空)');
+        hidePopup();
+        return;
+      } catch (e) {
+        toast(e.message + ' · 已回退本地占位');
+        setTimeout(() => toast(clientStubTranslate(text)), 400);
+        hidePopup();
+        return;
+      }
     }
-    try {
-      const data = await gmFetch(getApiUrl() + '/translate', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: { text },
-      });
-      toast(data.translation || '(空)');
-      hidePopup();
-    } catch (e) {
-      toast(e.message + ' · 已回退本地占位');
-      setTimeout(() => toast(clientStubTranslate(text)), 400);
-    }
+    toast(clientStubTranslate(text));
+    hidePopup();
   }
 
   async function doSave(enrich) {
-    // Primary path: always save locally (no login required)
+    if (busy) return;
     try {
-      const entry = createLocalEntry({
-        word: lastSel.text,
-        sentence: lastSel.sentence || lastSel.text,
-        source_url: location.href,
-        enrich,
-      });
+      const word = lastSel.text;
+      const sentence = lastSel.sentence || lastSel.text;
+      const source_url = location.href;
 
-      // Optional: also push to server when API+token configured
-      if (hasOptionalApi()) {
-        try {
-          const remote = await gmFetch(getApiUrl() + '/entries', {
-            method: 'POST',
-            headers: authHeaders(),
-            body: {
-              word: entry.word,
-              sentence: entry.sentence,
-              source_url: entry.source_url,
-            },
-          });
-          if (enrich && remote && remote.id) {
-            const enriched = await gmFetch(getApiUrl() + '/entries/' + remote.id + '/enrich', {
+      if (!enrich) {
+        const entry = createLocalEntry({
+          word,
+          sentence,
+          source_url,
+          status: 'pending_ai',
+        });
+        if (hasOptionalApi()) {
+          try {
+            await gmFetch(getApiUrl() + '/entries', {
               method: 'POST',
               headers: authHeaders(),
-              body: {},
+              body: { word: entry.word, sentence: entry.sentence, source_url: entry.source_url },
             });
-            const list = loadEntries();
-            const idx = list.findIndex((x) => x.id === entry.id);
-            if (idx >= 0) {
-              list[idx].ai_sentence_gloss = enriched.ai_sentence_gloss || list[idx].ai_sentence_gloss;
-              list[idx].ai_word_sense = enriched.ai_word_sense || list[idx].ai_word_sense;
-              list[idx].status = 'ready';
-              saveEntries(list);
-            }
-            toast('已本地存词并可选同步 + AI 释义：' + entry.word);
-          } else {
             toast('已本地存词（并已可选同步）：' + entry.word);
+          } catch (syncErr) {
+            toast('已本地存词（同步失败：' + syncErr.message + '）：' + entry.word);
           }
-        } catch (syncErr) {
+        } else {
+          toast('已本地存词：' + entry.word);
+        }
+        hidePopup();
+        return;
+      }
+
+      // AI 释义 path
+      busy = true;
+      setPopupLoading(hasLlmConfig() ? 'AI 释义中…' : '生成 stub 释义…');
+
+      const entry = createLocalEntry({
+        word,
+        sentence,
+        source_url,
+        status: 'pending_ai',
+      });
+
+      try {
+        const result = await enrichLocalEntry(entry);
+        patchLocalEntry(entry.id, {
+          ai_sentence_gloss: result.ai_sentence_gloss,
+          ai_word_sense: result.ai_word_sense,
+          status: 'ready',
+        });
+
+        if (hasOptionalApi()) {
+          try {
+            await optionalServerEnrich({
+              ...entry,
+              ai_sentence_gloss: result.ai_sentence_gloss,
+              ai_word_sense: result.ai_word_sense,
+              status: 'ready',
+            });
+            toast(
+              (result.stub ? '已本地 stub 释义并同步：' : '已 AI 释义并可选同步：') + entry.word
+            );
+          } catch (syncErr) {
+            toast(
+              (result.stub ? '已本地 stub 释义（同步失败）：' : '已 AI 释义（同步失败）：') +
+                entry.word
+            );
+          }
+        } else {
           toast(
-            enrich
-              ? '已本地存词+stub 释义（同步失败：' + syncErr.message + '）：' + entry.word
-              : '已本地存词（同步失败：' + syncErr.message + '）：' + entry.word
+            (result.stub
+              ? '已本地存词并生成 stub 释义（菜单可填 LLM Key）：'
+              : '已本地存词并 AI 释义：') + entry.word
           );
         }
-      } else {
-        toast(
-          enrich
-            ? '已本地存词并生成 stub 释义：' + entry.word
-            : '已本地存词：' + entry.word
-        );
+      } catch (llmErr) {
+        patchLocalEntry(entry.id, { status: 'failed' });
+        toast('已存词，但 AI 释义失败：' + (llmErr.message || String(llmErr)));
+      } finally {
+        busy = false;
+        hidePopup();
       }
-      hidePopup();
     } catch (e) {
+      busy = false;
       toast(e.message || '存词失败');
+      hidePopup();
     }
   }
 
   function onSelectionChange() {
+    if (busy) return;
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) {
       return;
@@ -583,10 +843,19 @@
   }, { passive: true });
 
   document.addEventListener('mousedown', (e) => {
+    if (busy) return;
     if (popup && !popup.contains(e.target)) hidePopup();
     if (panel && !panel.contains(e.target) && !(popup && popup.contains(e.target))) {
       /* keep panel open unless closed explicitly */
     }
   });
-  document.addEventListener('scroll', () => hidePopup(), true);
+  document.addEventListener('scroll', () => {
+    if (!busy) hidePopup();
+  }, true);
+
+  // Expose parse helpers for optional page-console smoke (no export in userscript)
+  try {
+    window.__sensebookParseEnrichJson = parseEnrichJson;
+    window.__sensebookBuildEnrichUserPrompt = buildEnrichUserPrompt;
+  } catch { /* ignore */ }
 })();

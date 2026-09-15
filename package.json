@@ -2,12 +2,14 @@
   "name": "sensebook",
   "version": "0.1.0",
   "private": true,
-  "description": "Sensebook — browser-first 划词 vocab tool",
+  "description": "Sensebook \u2014 browser-first \u5212\u8bcd vocab tool",
   "type": "module",
   "scripts": {
     "dev": "node --watch server/index.js",
     "start": "node server/index.js",
-    "db:init": "node server/db.js --init"
+    "db:init": "node server/db.js --init",
+    "test": "node scripts/test-llm-parse.mjs",
+    "test:llm-parse": "node scripts/test-llm-parse.mjs"
   },
   "engines": {
     "node": ">=18"

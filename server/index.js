@@ -150,6 +150,7 @@ app.post('/entries/:id/enrich', async (c) => {
       const result = await enrichEntry({
         word: entry.word,
         sentence: entry.sentence,
+        source_url: entry.source_url,
       });
       const updated = updateEntry(id, user.id, {
         ai_sentence_gloss: result.ai_sentence_gloss,

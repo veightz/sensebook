@@ -12,11 +12,29 @@
 2. 新建脚本，粘贴 [`userscript/sensebook.user.js`](userscript/sensebook.user.js) 全文并保存。
 3. 打开任意网页划选单词：
    - **存词** → 写入本地（键名 `sensebook_entries`），**无需 API / Token**
-   - **AI释义** → 本地 stub 释义（未配置 API 时）
-   - **翻译** → 未配置 API 时显示占位提示
+   - **AI释义** → 已配置 LLM Key 时直连模型生成真实释义；未配置时使用本地 stub
+   - **翻译** → 未配置可选同步 API 时显示占位提示
 4. 油猴菜单 **「Sensebook：我的生词（本地）」** 可查看 / 删除本地词库。
 
 本地模式说明也会在菜单「关于本地模式」中提示。登录相关菜单标注为 **「登录/同步（可选）」**。
+
+## 配置真实 AI 释义（推荐：DeepSeek / OpenRouter）
+
+AI 释义走油猴 **直连** OpenAI 兼容接口（`GM_xmlhttpRequest` → `{base}/chat/completions`），**不经过** Sensebook 服务器。Key 仅保存在本机油猴存储。
+
+在 Tampermonkey 菜单中依次填写：
+
+| 菜单项 | 说明 | 示例 |
+|--------|------|------|
+| **Sensebook：LLM Base URL** | OpenAI 兼容基址 | DeepSeek：`https://api.deepseek.com/v1`；OpenRouter：`https://openrouter.ai/api/v1` |
+| **Sensebook：LLM API Key** | 供应商发放的 Key | 从 [DeepSeek 开放平台](https://platform.deepseek.com/) 或 OpenRouter 控制台复制 |
+| **Sensebook：LLM 模型** | 模型名 | DeepSeek 默认 `deepseek-chat`；也可填 `gpt-4o-mini` 等（视供应商） |
+
+留空 Base URL 时默认使用 `https://api.deepseek.com/v1`；模型默认 `deepseek-chat`。配置好 Key 后划词点 **AI释义**，弹层会显示「AI 释义中…」，成功则 `status=ready` 并写入句意/词义；失败则保留词条且 `status=failed`，并 toast 错误。
+
+> **安全提醒**：API Key 只存在你本机的油猴/`GM_setValue` 中，请勿提交到仓库或发给他人。可用菜单「清除 LLM API Key」随时删除。
+
+可选同步用的「登录/同步 — API 地址 / Token」与 LLM 设置相互独立，不要混填。
 
 ## 可选：启动本地服务器（同步 / 词库页）
 
@@ -28,7 +46,7 @@ npm install
 
 # 2. 配置环境（可选）
 cp .env.example .env
-# 编辑 JWT_SECRET；若需真实 AI，填入 OPENAI_COMPATIBLE_BASE_URL / API_KEY
+# 编辑 JWT_SECRET；若需服务端真实 AI，填入 OPENAI_COMPATIBLE_BASE_URL / API_KEY / MODEL
 
 # 3. 启动服务
 npm run dev
@@ -43,7 +61,7 @@ npm run dev
 curl http://127.0.0.1:8787/health
 ```
 
-油猴菜单中可填写（均为可选）：
+油猴菜单中可填写（均为可选，与 LLM 无关）：
 
 - **登录/同步（可选）— API 地址** → 例如 `http://127.0.0.1:8787`
 - **登录/同步（可选）— Token** → 从词库页 Local Storage 复制 `sensebook_token`
@@ -62,17 +80,31 @@ curl -s -X POST http://127.0.0.1:8787/auth/login \
 
 ### A. 纯本地 MVP（推荐先测）
 
-1. 只安装用户脚本，**不要**配置 API / Token。
+1. 只安装用户脚本，**不要**配置 API / Token / LLM Key。
 2. 任意网页划词 → **存词** → toast 提示已本地存词。
 3. 菜单打开 **我的生词（本地）**，可见刚存的词条。
-4. **AI释义** 应写入 stub 句意/词义，`status` 为 `ready`。
+4. **AI释义**（无 Key）应写入 stub 句意/词义，`status` 为 `ready`。
 
-### B. 可选服务端联调
+### B. 真实 LLM（油猴直连）
 
-1. `npm run dev`，确认 `/health` 返回 `ok`。
+1. 菜单填写 LLM Base URL + API Key + 模型（见上文）。
+2. 划词 → **AI释义** → 等待加载 → 本地词库出现中文句意/词义，`status=ready`。
+3. 故意填错 Key → 应 toast 失败且词条 `status=failed`（词条仍保留）。
+
+### C. 可选服务端联调
+
+1. `npm run dev`，确认 `/health` 返回 `ok`（`llm` 字段表示是否配置了服务端 OPENAI_COMPATIBLE_*）。
 2. 打开 http://127.0.0.1:8787 注册并登录。
 3. 油猴配置可选 API + Token。
 4. 划词存词后，本地列表与服务器词库页均可看到（服务器路径仍需登录）。
+5. `POST /entries/:id/enrich` 与油猴直连使用同一套 JSON 字段：`ai_sentence_gloss` / `ai_word_sense`。
+
+### 单元烟测（无需真实 Key）
+
+```bash
+npm test
+# 或 npm run test:llm-parse
+```
 
 ## API 一览（可选后端）
 
@@ -94,13 +126,14 @@ curl -s -X POST http://127.0.0.1:8787/auth/login \
 docs/schema.md           # 数据模型（含本地优先说明）
 server/                  # Hono API + SQLite（可选）
 web/index.html           # 词库页（可选；支持未登录时浏览本页 localStorage）
-userscript/sensebook.user.js  # 主路径：本地优先划词
+userscript/sensebook.user.js  # 主路径：本地优先划词 + 可选直连 LLM
+scripts/test-llm-parse.mjs    # prompt / JSON 解析烟测
 .env.example
 ```
 
 ## 环境变量
 
-见 `.env.example`。未配置 `OPENAI_COMPATIBLE_*` 时，服务端 enrich / translate 返回 stub 文本；油猴在无 API 时使用客户端 stub。
+见 `.env.example`。未配置 `OPENAI_COMPATIBLE_*` 时，服务端 enrich / translate 返回 stub 文本；油猴在无 LLM Key 时使用客户端 stub，有 Key 时直连供应商。
 
 ## 许可
 

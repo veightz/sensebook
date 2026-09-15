@@ -38,13 +38,16 @@
 ## 状态流转
 
 1. 存词 → `status = pending_ai`（若同时做 AI 释义则可直接 `ready`）
-2. AI 释义成功（服务端 enrich 或本地 stub）→ `ready`（写入 gloss / sense）
-3. enrich 失败 → `failed`（本地 stub 路径一般直接 `ready`）
+2. AI 释义成功（用户脚本直连 LLM、服务端 enrich，或无 Key 时 stub）→ `ready`（写入 gloss / sense）
+3. enrich 失败 → `failed`（保留词条；无 Key 时 stub 路径直接 `ready`）
 
 ## 油猴本地键
 
 | 键 | 说明 |
 |----|------|
 | `sensebook_entries` | 词条数组（主数据） |
-| `sensebook_api_url` | 可选 API 基址 |
-| `sensebook_token` | 可选 JWT |
+| `sensebook_api_url` | 可选 Sensebook 服务器 API 基址（同步） |
+| `sensebook_token` | 可选 JWT（同步） |
+| `sensebook_llm_base_url` | LLM Base URL（默认 `https://api.deepseek.com/v1`） |
+| `sensebook_llm_api_key` | LLM API Key（仅本机；AI 释义直连用） |
+| `sensebook_llm_model` | LLM 模型（默认 `deepseek-chat`） |
