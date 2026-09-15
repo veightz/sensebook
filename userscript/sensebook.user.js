@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sensebook 划词
 // @namespace    https://github.com/veightz/sensebook
-// @version      0.3.0
+// @version      0.3.1
 // @description  划词翻译 / 存词 / AI 释义 — Sensebook（本地优先，可不登录；可选直连 LLM）
 // @author       Sensebook
 // @match        *://*/*
@@ -27,7 +27,7 @@
   const LLM_MODEL_KEY = 'sensebook_llm_model';
 
   const DEFAULT_LLM_BASE_URL = 'https://api.deepseek.com/v1';
-  const DEFAULT_LLM_MODEL = 'deepseek-chat';
+  const DEFAULT_LLM_MODEL = 'deepseek-flash';
 
   const ENRICH_SYSTEM_PROMPT =
     '你是简洁的语境词汇助教。根据用户给出的单词、句子与来源页，用中文解释。' +
@@ -217,7 +217,7 @@
   GM_registerMenuCommand('Sensebook：LLM 模型', () => {
     const cur = storeGet(LLM_MODEL_KEY, '');
     const v = prompt(
-      'LLM 模型名\nDeepSeek 默认：deepseek-chat\n也可填 gpt-4o-mini 等（视供应商而定）',
+      'LLM 模型名\nDeepSeek 默认：deepseek-flash（V4.1-Flash）\n也可填 gpt-4o-mini 等（视供应商而定）',
       (typeof cur === 'string' && cur) || DEFAULT_LLM_MODEL
     );
     if (v != null) storeSet(LLM_MODEL_KEY, v.trim());

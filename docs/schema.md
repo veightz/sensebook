@@ -50,4 +50,4 @@
 | `sensebook_token` | 可选 JWT（同步） |
 | `sensebook_llm_base_url` | LLM Base URL（默认 `https://api.deepseek.com/v1`） |
 | `sensebook_llm_api_key` | LLM API Key（仅本机；AI 释义直连用） |
-| `sensebook_llm_model` | LLM 模型（默认 `deepseek-chat`） |
+| `sensebook_llm_model` | LLM 模型（默认 `deepseek-flash`） |

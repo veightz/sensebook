@@ -28,9 +28,9 @@ AI 释义走油猴 **直连** OpenAI 兼容接口（`GM_xmlhttpRequest` → `{ba
 |--------|------|------|
 | **Sensebook：LLM Base URL** | OpenAI 兼容基址 | DeepSeek：`https://api.deepseek.com/v1`；OpenRouter：`https://openrouter.ai/api/v1` |
 | **Sensebook：LLM API Key** | 供应商发放的 Key | 从 [DeepSeek 开放平台](https://platform.deepseek.com/) 或 OpenRouter 控制台复制 |
-| **Sensebook：LLM 模型** | 模型名 | DeepSeek 默认 `deepseek-chat`；也可填 `gpt-4o-mini` 等（视供应商） |
+| **Sensebook：LLM 模型** | 模型名 | DeepSeek 默认 `deepseek-flash`（V4.1-Flash）；也可填 `gpt-4o-mini` 等（视供应商） |
 
-留空 Base URL 时默认使用 `https://api.deepseek.com/v1`；模型默认 `deepseek-chat`。配置好 Key 后划词点 **AI释义**，弹层会显示「AI 释义中…」，成功则 `status=ready` 并写入句意/词义；失败则保留词条且 `status=failed`，并 toast 错误。
+留空 Base URL 时默认使用 `https://api.deepseek.com/v1`；模型默认 `deepseek-flash`。配置好 Key 后划词点 **AI释义**，弹层会显示「AI 释义中…」，成功则 `status=ready` 并写入句意/词义；失败则保留词条且 `status=failed`，并 toast 错误。
 
 > **安全提醒**：API Key 只存在你本机的油猴/`GM_setValue` 中，请勿提交到仓库或发给他人。可用菜单「清除 LLM API Key」随时删除。
 
