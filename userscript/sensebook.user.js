@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.4.2
+// @version      0.1.202609151644
 // @description  划词翻译 / 存词 / AI 释义 — Sensebook（本地优先；DeepSeek LLM 设置面板）
 // @author       Sensebook
 // @match        *://*/*
@@ -237,6 +237,8 @@
   let llmPanelHost = null;
   let lastSel = { text: '', sentence: '', rect: null };
   let busy = false;
+  let fabRoot = null;
+  let fabSheet = null;
 
   function toast(msg) {
     let el = document.getElementById('sensebook-toast');
@@ -362,7 +364,10 @@
     popup.appendChild(mkBtn('翻译', () => doTranslate()));
     popup.appendChild(mkBtn('存词', () => doSave(false)));
     popup.appendChild(mkBtn('AI释义', () => doSave(true), '#7c3aed'));
-    popup.appendChild(mkBtn('设置', () => { hidePopup(); showLlmSettingsPanel(); }, '#475569'));
+    popup.appendChild(mkBtn('DeepSeek', () => {
+      hidePopup();
+      setTimeout(() => showLlmSettingsPanel(), 50);
+    }, '#475569'));
     popup.appendChild(mkBtn('生词', () => { hidePopup(); showLocalPanel(); }, '#0f766e'));
 
     document.documentElement.appendChild(popup);
@@ -699,6 +704,33 @@
       <div style="font-weight:700;font-size:16px;">我的生词（本地）</div>
       <div style="font-size:12px;color:#64748b;margin-top:2px;">无需登录 · ${llmHint} · 共 ${entries.length} 条</div>
     </div>`;
+    const headerActions = document.createElement('div');
+    Object.assign(headerActions.style, {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      gap: '6px',
+      flexWrap: 'wrap',
+      flexShrink: '0',
+    });
+    const configBtn = document.createElement('button');
+    configBtn.type = 'button';
+    configBtn.textContent = '配置 DeepSeek';
+    Object.assign(configBtn.style, {
+      minHeight: '40px',
+      padding: '8px 10px',
+      border: 'none',
+      borderRadius: '8px',
+      background: '#7c3aed',
+      color: '#fff',
+      cursor: 'pointer',
+      fontSize: '13px',
+      whiteSpace: 'nowrap',
+      touchAction: 'manipulation',
+    });
+    configBtn.onclick = () => showLlmSettingsPanel();
+    headerActions.appendChild(configBtn);
+
     const closeBtn = document.createElement('button');
     closeBtn.type = 'button';
     closeBtn.textContent = '关闭';
@@ -711,9 +743,11 @@
       color: '#fff',
       cursor: 'pointer',
       fontSize: '14px',
+      touchAction: 'manipulation',
     });
     closeBtn.onclick = () => hidePanel();
-    header.appendChild(closeBtn);
+    headerActions.appendChild(closeBtn);
+    header.appendChild(headerActions);
     panel.appendChild(header);
 
     const body = document.createElement('div');
@@ -1102,6 +1136,117 @@
   document.addEventListener('scroll', () => {
     if (!busy) hidePopup();
   }, true);
+
+  function hideFabSheet() {
+    if (fabSheet) {
+      fabSheet.style.display = 'none';
+      if (fabRoot) fabRoot.querySelector('[data-sensebook-fab]')?.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  function showFabSheet() {
+    if (!fabSheet) return;
+    const opening = fabSheet.style.display === 'none';
+    fabSheet.style.display = opening ? 'flex' : 'none';
+    if (fabRoot) fabRoot.querySelector('[data-sensebook-fab]')?.setAttribute('aria-expanded', String(opening));
+  }
+
+  function setupFab() {
+    if (fabRoot) return;
+    fabRoot = document.createElement('div');
+    fabRoot.id = 'sensebook-fab-root';
+    Object.assign(fabRoot.style, {
+      position: 'fixed',
+      right: '14px',
+      bottom: 'max(14px, env(safe-area-inset-bottom))',
+      zIndex: '2147483645',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'flex-end',
+      gap: '8px',
+      fontFamily: 'system-ui,sans-serif',
+    });
+
+    fabSheet = document.createElement('div');
+    fabSheet.id = 'sensebook-fab-sheet';
+    Object.assign(fabSheet.style, {
+      display: 'none',
+      flexDirection: 'column',
+      gap: '6px',
+      width: '154px',
+      padding: '8px',
+      background: '#fff',
+      border: '1px solid #e2e8f0',
+      borderRadius: '12px',
+      boxShadow: '0 6px 24px rgba(15,23,42,.22)',
+    });
+
+    const makeAction = (label, onClick, background) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      Object.assign(button.style, {
+        minHeight: '44px',
+        width: '100%',
+        padding: '8px 10px',
+        border: 'none',
+        borderRadius: '8px',
+        background,
+        color: '#fff',
+        fontSize: '13px',
+        cursor: 'pointer',
+        textAlign: 'left',
+        touchAction: 'manipulation',
+      });
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        hideFabSheet();
+        setTimeout(onClick, 0);
+      });
+      return button;
+    };
+    fabSheet.appendChild(makeAction('DeepSeek 设置', showLlmSettingsPanel, '#7c3aed'));
+    fabSheet.appendChild(makeAction('我的生词', showLocalPanel, '#0f766e'));
+
+    const fabButton = document.createElement('button');
+    fabButton.type = 'button';
+    fabButton.textContent = 'Sensebook';
+    fabButton.setAttribute('data-sensebook-fab', 'true');
+    fabButton.setAttribute('aria-label', '打开 Sensebook 快捷菜单');
+    fabButton.setAttribute('aria-expanded', 'false');
+    Object.assign(fabButton.style, {
+      minWidth: '112px',
+      minHeight: '44px',
+      padding: '10px 14px',
+      border: 'none',
+      borderRadius: '999px',
+      background: '#0f172a',
+      color: '#fff',
+      boxShadow: '0 4px 16px rgba(15,23,42,.28)',
+      fontSize: '13px',
+      fontWeight: '700',
+      cursor: 'pointer',
+      touchAction: 'manipulation',
+    });
+    fabButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      showFabSheet();
+    });
+
+    fabRoot.appendChild(fabSheet);
+    fabRoot.appendChild(fabButton);
+    document.documentElement.appendChild(fabRoot);
+  }
+
+  document.addEventListener('mousedown', (e) => {
+    if (fabSheet && fabSheet.style.display !== 'none' && fabRoot && !fabRoot.contains(e.target)) {
+      hideFabSheet();
+    }
+  });
+
+  setupFab();
 
   // Expose parse helpers for optional page-console smoke (no export in userscript)
   try {

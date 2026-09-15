@@ -13,8 +13,8 @@
 2. 打开安装链接（公开仓库 raw）：  
    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js  
    油猴会弹出安装页，确认安装即可。  
-3. 之后每次我们提高 `@version` 并推到 `main`，油猴会按 `@updateURL` 检查更新（也可在插件里手动「检查更新」）。  
-4. 划词弹层点 **设置**，填 DeepSeek API Key。
+3. 之后每次推送 `main` 前更新 `@version`，油猴会按 `@updateURL` 检查更新（也可在插件里手动「检查更新」）。v1 之前统一使用 `0.1.<时间>`，时间为 Asia/Shanghai 的 `YYYYMMDDHHmm`；每次推送只递增时间部分。
+4. 划词弹层点 **DeepSeek**，填 DeepSeek API Key；也可在页面右下角 **Sensebook** FAB 中选择「DeepSeek 设置」或「我的生词」。
 
 本地开发若已手动粘贴过旧脚本：删掉旧脚本后改用上面的链接重装，才能挂上自动更新。
 
@@ -26,7 +26,7 @@
    - **存词** → 写入本地（键名 `sensebook_entries`），**无需 API / Token**
    - **AI释义** → 已在「LLM 设置」配置 DeepSeek Key 时直连生成真实释义；未配置时使用本地 stub
    - **翻译** → 未配置可选同步 API 时显示占位提示
-4. 油猴菜单 **「Sensebook：我的生词（本地）」** 可查看 / 删除本地词库；**「Sensebook：LLM 设置」** 配置 DeepSeek。也可从划词弹层点「设置」。
+4. 油猴菜单 **「Sensebook：我的生词（本地）」** 可查看 / 删除本地词库；**「Sensebook：LLM 设置」** 配置 DeepSeek。也可从划词弹层的 **DeepSeek** 按钮、词库面板顶部的 **配置 DeepSeek** 按钮，或右下角 Sensebook FAB 进入。
 
 本地模式说明也会在菜单「关于本地模式」中提示。登录相关菜单标注为 **「登录/同步（可选）」**。
 
@@ -34,7 +34,7 @@
 
 AI 释义走油猴 **直连** DeepSeek 的 OpenAI 兼容接口（`GM_xmlhttpRequest` → `{base}/chat/completions`），**不经过** Sensebook 服务器。Key 仅保存在本机油猴存储。当前 P0 **仅支持 DeepSeek**。
 
-1. 打开油猴菜单 **「Sensebook：LLM 设置」**，弹出页内设置面板（Shadow DOM）。
+1. 打开油猴菜单 **「Sensebook：LLM 设置」**，或使用划词弹层 **DeepSeek** 按钮、词库面板顶部 **配置 DeepSeek**、右下角 Sensebook FAB，弹出页内设置面板（Shadow DOM）。
 2. 面板字段：
    - **供应商**：DeepSeek（固定）
    - **Base URL**：默认 `https://api.deepseek.com/v1`（高级可改；须为 OpenAI 兼容的 **`/v1` 根**，脚本会追加 `/chat/completions`，勿填完整 completions 路径）
