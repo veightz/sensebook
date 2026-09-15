@@ -7,6 +7,18 @@
 本仓库为本地 MVP 脚手架：Tampermonkey 用户脚本（主路径）+ 可选 Node/Hono/SQLite 后端。无 Android 应用。
 
 
+
+## Chrome 上看不到按钮？
+
+Chrome 138+ 需要单独打开油猴的用户脚本权限，否则脚本显示已安装但**不会在页面执行**：
+
+1. 打开 `chrome://extensions`
+2. Tampermonkey → **详情**
+3. 启用 **允许运行用户脚本（Allow user scripts）**
+4. 旧版 Chrome：在扩展页打开右上角 **开发者模式**
+5. 刷新普通网页（如 https://example.com）后再看右下角
+
+
 ## 安装油猴脚本（一次安装，之后自动更新）
 
 1. 浏览器安装 [Tampermonkey](https://www.tampermonkey.net/) 或 Violentmonkey  
