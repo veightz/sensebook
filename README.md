@@ -52,7 +52,7 @@ AI 释义走油猴 **直连** DeepSeek 的 OpenAI 兼容接口（`GM_xmlhttpRequ
 2. 面板字段：
    - **供应商**：DeepSeek（固定）
    - **Base URL**：默认 `https://api.deepseek.com/v1`（高级可改；须为 OpenAI 兼容的 **`/v1` 根**，脚本会追加 `/chat/completions`，勿填完整 completions 路径）
-   - **API Key**：从 [DeepSeek 开放平台](https://platform.deepseek.com/) 复制；密码框 + 可显示；下方显示是否已设置（脱敏）
+   - **API Key**：从 [DeepSeek API Keys 页面](https://platform.deepseek.com/api_keys) 创建或复制；面板也提供「去 DeepSeek 官网创建 API Key」链接；密码框 + 可显示；下方显示是否已设置（脱敏）
    - **模型**：默认 `deepseek-flash`（可改）
 3. 点 **保存** 写入本机（键名仍为 `sensebook_llm_base_url` / `sensebook_llm_api_key` / `sensebook_llm_model`）。
 4. 可选点 **测试连接**：向 `{base}/chat/completions` 发一条极小请求，面板内显示成功 / 鉴权失败 / 网络错误。

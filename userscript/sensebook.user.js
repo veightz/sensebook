@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609151658
+// @version      0.1.202609151730
 // @description  划词翻译 / 存词 / AI 释义 — Sensebook（本地优先；DeepSeek LLM 设置面板）
 // @author       Sensebook
 // @match        *://*/*
@@ -294,6 +294,11 @@
   let fabButton = null;
   let onboardingScheduled = false;
 
+  function eventInsideLlmSettings(e) {
+    const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
+    return path.length ? path.includes(llmPanelHost) : e.target === llmPanelHost;
+  }
+
   function toast(msg) {
     let el = document.getElementById('sensebook-toast');
     if (!el) {
@@ -547,6 +552,13 @@
   .key-row { display: flex; gap: 8px; align-items: stretch; }
   .key-row input { flex: 1; }
   .key-status { margin-top: 6px; font-size: 12px; color: #64748b; }
+  .key-link {
+    display: inline-block;
+    margin-top: 8px;
+    color: #6d28d9;
+    font-size: 12px;
+    text-decoration: underline;
+  }
   .note {
     margin: 12px 0 0;
     padding: 10px 12px;
@@ -601,6 +613,7 @@
     <button type="button" class="secondary" id="toggleKey">显示</button>
   </div>
   <div class="key-status" id="keyStatus"></div>
+  <a class="key-link" href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">去 DeepSeek 官网创建 API Key</a>
 
   <label>模型 <span class="hint">默认 deepseek-flash，可改</span></label>
   <input type="text" id="model" autocomplete="off" spellcheck="false" />
@@ -630,6 +643,8 @@
     modelInput.value = modelVal;
     keyInput.value = curKey;
     keyStatus.textContent = '当前：' + maskApiKey(curKey);
+    const card = shadow.querySelector('.card');
+    card.addEventListener('click', (e) => e.stopPropagation());
 
     function setStatus(msg, kind) {
       statusEl.textContent = msg || '';
@@ -652,7 +667,9 @@
 
     $('close').onclick = () => hideLlmSettingsPanel();
     host.addEventListener('click', (e) => {
-      if (e.target === host) hideLlmSettingsPanel();
+      const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
+      const trueTarget = path.length ? path[0] : e.target;
+      if (trueTarget === host) hideLlmSettingsPanel();
     });
 
     $('save').onclick = () => {
@@ -1193,6 +1210,7 @@
   }, { passive: true });
 
   document.addEventListener('mousedown', (e) => {
+    if (llmPanelHost && eventInsideLlmSettings(e)) return;
     if (busy) return;
     if (popup && !popup.contains(e.target)) hidePopup();
     if (panel && !panel.contains(e.target) && !(popup && popup.contains(e.target))) {
@@ -1326,6 +1344,7 @@
   }
 
   document.addEventListener('mousedown', (e) => {
+    if (llmPanelHost && eventInsideLlmSettings(e)) return;
     if (fabSheet && fabSheet.style.display !== 'none' && fabRoot && !fabRoot.contains(e.target)) {
       hideFabSheet();
     }
