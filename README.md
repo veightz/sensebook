@@ -12,29 +12,31 @@
 2. 新建脚本，粘贴 [`userscript/sensebook.user.js`](userscript/sensebook.user.js) 全文并保存。
 3. 打开任意网页划选单词：
    - **存词** → 写入本地（键名 `sensebook_entries`），**无需 API / Token**
-   - **AI释义** → 已配置 LLM Key 时直连模型生成真实释义；未配置时使用本地 stub
+   - **AI释义** → 已在「LLM 设置」配置 DeepSeek Key 时直连生成真实释义；未配置时使用本地 stub
    - **翻译** → 未配置可选同步 API 时显示占位提示
-4. 油猴菜单 **「Sensebook：我的生词（本地）」** 可查看 / 删除本地词库。
+4. 油猴菜单 **「Sensebook：我的生词（本地）」** 可查看 / 删除本地词库；**「Sensebook：LLM 设置」** 配置 DeepSeek。
 
 本地模式说明也会在菜单「关于本地模式」中提示。登录相关菜单标注为 **「登录/同步（可选）」**。
 
-## 配置真实 AI 释义（推荐：DeepSeek / OpenRouter）
+## 配置真实 AI 释义（DeepSeek）
 
-AI 释义走油猴 **直连** OpenAI 兼容接口（`GM_xmlhttpRequest` → `{base}/chat/completions`），**不经过** Sensebook 服务器。Key 仅保存在本机油猴存储。
+AI 释义走油猴 **直连** DeepSeek 的 OpenAI 兼容接口（`GM_xmlhttpRequest` → `{base}/chat/completions`），**不经过** Sensebook 服务器。Key 仅保存在本机油猴存储。当前 P0 **仅支持 DeepSeek**。
 
-在 Tampermonkey 菜单中依次填写：
+1. 打开油猴菜单 **「Sensebook：LLM 设置」**，弹出页内设置面板（Shadow DOM）。
+2. 面板字段：
+   - **供应商**：DeepSeek（固定）
+   - **Base URL**：默认 `https://api.deepseek.com/v1`（高级可改；须为 OpenAI 兼容的 **`/v1` 根**，脚本会追加 `/chat/completions`，勿填完整 completions 路径）
+   - **API Key**：从 [DeepSeek 开放平台](https://platform.deepseek.com/) 复制；密码框 + 可显示；下方显示是否已设置（脱敏）
+   - **模型**：默认 `deepseek-flash`（可改）
+3. 点 **保存** 写入本机（键名仍为 `sensebook_llm_base_url` / `sensebook_llm_api_key` / `sensebook_llm_model`）。
+4. 可选点 **测试连接**：向 `{base}/chat/completions` 发一条极小请求，面板内显示成功 / 鉴权失败 / 网络错误。
+5. **清除 Key** 只删 Key，保留 URL 与模型。
 
-| 菜单项 | 说明 | 示例 |
-|--------|------|------|
-| **Sensebook：LLM Base URL** | OpenAI 兼容基址 | DeepSeek：`https://api.deepseek.com/v1`；OpenRouter：`https://openrouter.ai/api/v1` |
-| **Sensebook：LLM API Key** | 供应商发放的 Key | 从 [DeepSeek 开放平台](https://platform.deepseek.com/) 或 OpenRouter 控制台复制 |
-| **Sensebook：LLM 模型** | 模型名 | DeepSeek 默认 `deepseek-flash`（V4.1-Flash）；也可填 `gpt-4o-mini` 等（视供应商） |
+未配置 Key 时 AI 释义仍走本地 stub，本地存词不受影响。配置好后划词点 **AI释义**，成功则 `status=ready`；失败保留词条且 `status=failed`。
 
-留空 Base URL 时默认使用 `https://api.deepseek.com/v1`；模型默认 `deepseek-flash`。配置好 Key 后划词点 **AI释义**，弹层会显示「AI 释义中…」，成功则 `status=ready` 并写入句意/词义；失败则保留词条且 `status=failed`，并 toast 错误。
+> **安全提醒**：API Key 只存在你本机的油猴/`GM_setValue` 中，请勿提交到仓库或发给他人。
 
-> **安全提醒**：API Key 只存在你本机的油猴/`GM_setValue` 中，请勿提交到仓库或发给他人。可用菜单「清除 LLM API Key」随时删除。
-
-可选同步用的「登录/同步 — API 地址 / Token」与 LLM 设置相互独立，不要混填。
+可选同步用的「登录/同步 — API 地址 / Token」与 LLM 设置相互独立，不要混填到本面板。
 
 ## 可选：启动本地服务器（同步 / 词库页）
 
@@ -85,9 +87,9 @@ curl -s -X POST http://127.0.0.1:8787/auth/login \
 3. 菜单打开 **我的生词（本地）**，可见刚存的词条。
 4. **AI释义**（无 Key）应写入 stub 句意/词义，`status` 为 `ready`。
 
-### B. 真实 LLM（油猴直连）
+### B. 真实 LLM（油猴直连 DeepSeek）
 
-1. 菜单填写 LLM Base URL + API Key + 模型（见上文）。
+1. 菜单打开 **「Sensebook：LLM 设置」**，填入 DeepSeek API Key（URL/模型可用默认），保存；可用「测试连接」。
 2. 划词 → **AI释义** → 等待加载 → 本地词库出现中文句意/词义，`status=ready`。
 3. 故意填错 Key → 应 toast 失败且词条 `status=failed`（词条仍保留）。
 

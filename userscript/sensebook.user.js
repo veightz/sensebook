@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Sensebook 划词
 // @namespace    https://github.com/veightz/sensebook
-// @version      0.3.1
-// @description  划词翻译 / 存词 / AI 释义 — Sensebook（本地优先，可不登录；可选直连 LLM）
+// @version      0.4.0
+// @description  划词翻译 / 存词 / AI 释义 — Sensebook（本地优先；DeepSeek LLM 设置面板）
 // @author       Sensebook
 // @match        *://*/*
 // @grant        GM_getValue
@@ -162,7 +162,7 @@
   }
 
   function clientStubTranslate(text) {
-    return `[本地翻译占位] ${text}\n（未配置 LLM 或可选同步 API。可在菜单填写「LLM API Key」直连释义，或配置登录/同步）`;
+    return `[本地翻译占位] ${text}\n（未配置 DeepSeek Key 或可选同步 API。菜单「LLM 设置」可填写 Key，或配置登录/同步）`;
   }
 
   function buildEnrichUserPrompt({ word, sentence, source_url }) {
@@ -195,37 +195,8 @@
     showLocalPanel();
   });
 
-  GM_registerMenuCommand('Sensebook：LLM Base URL', () => {
-    const cur = storeGet(LLM_BASE_URL_KEY, '');
-    const v = prompt(
-      'LLM Base URL（OpenAI 兼容，本地保存）\n例如 DeepSeek：https://api.deepseek.com/v1\n或 OpenRouter：https://openrouter.ai/api/v1\n留空则使用默认 DeepSeek',
-      (typeof cur === 'string' && cur) || DEFAULT_LLM_BASE_URL
-    );
-    if (v != null) storeSet(LLM_BASE_URL_KEY, v.trim());
-  });
-
-  GM_registerMenuCommand('Sensebook：LLM API Key', () => {
-    const cur = getLlmApiKey();
-    const masked = cur ? cur.slice(0, 4) + '…' + cur.slice(-4) : '';
-    const v = prompt(
-      'LLM API Key（仅保存在本机油猴存储，不会上传 Sensebook 服务器）\nDeepSeek / OpenRouter / OpenAI 兼容均可\n当前：' + (masked || '未设置'),
-      cur
-    );
-    if (v != null) storeSet(LLM_API_KEY_KEY, v.trim());
-  });
-
-  GM_registerMenuCommand('Sensebook：LLM 模型', () => {
-    const cur = storeGet(LLM_MODEL_KEY, '');
-    const v = prompt(
-      'LLM 模型名\nDeepSeek 默认：deepseek-flash（V4.1-Flash）\n也可填 gpt-4o-mini 等（视供应商而定）',
-      (typeof cur === 'string' && cur) || DEFAULT_LLM_MODEL
-    );
-    if (v != null) storeSet(LLM_MODEL_KEY, v.trim());
-  });
-
-  GM_registerMenuCommand('Sensebook：清除 LLM API Key', () => {
-    storeSet(LLM_API_KEY_KEY, '');
-    toast('已清除 LLM API Key（本地词库不受影响）');
+  GM_registerMenuCommand('Sensebook：LLM 设置', () => {
+    showLlmSettingsPanel();
   });
 
   GM_registerMenuCommand('Sensebook：登录/同步（可选）— API 地址', () => {
@@ -254,13 +225,14 @@
   GM_registerMenuCommand('Sensebook：关于本地模式', () => {
     toast(
       hasLlmConfig()
-        ? '本地优先：存词在本机；已配置 LLM，AI 释义将直连模型'
-        : '默认本地优先：存词写入油猴存储。菜单填写 LLM API Key 后可真实 AI 释义'
+        ? '本地优先：存词在本机；已配置 DeepSeek，AI 释义将直连模型'
+        : '默认本地优先：存词写入油猴存储。菜单「LLM 设置」填写 DeepSeek API Key 后可真实 AI 释义'
     );
   });
 
   let popup = null;
   let panel = null;
+  let llmPanelHost = null;
   let lastSel = { text: '', sentence: '', rect: null };
   let busy = false;
 
@@ -413,7 +385,279 @@
     );
   }
 
-  function showLocalPanel() {
+  function maskApiKey(key) {
+    if (!key) return '未设置';
+    if (key.length <= 8) return '已设置（••••）';
+    return '已设置：' + key.slice(0, 4) + '…' + key.slice(-4);
+  }
+
+  function hideLlmSettingsPanel() {
+    if (llmPanelHost) {
+      llmPanelHost.remove();
+      llmPanelHost = null;
+    }
+  }
+
+  /**
+   * In-page DeepSeek LLM settings (Shadow DOM).
+   * Replaces scattered prompt() menus. Keeps sensebook_llm_* keys.
+   */
+  function showLlmSettingsPanel() {
+    hideLlmSettingsPanel();
+
+    const host = document.createElement('div');
+    host.id = 'sensebook-llm-settings-host';
+    Object.assign(host.style, {
+      position: 'fixed',
+      inset: '0',
+      zIndex: '2147483647',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '16px',
+      boxSizing: 'border-box',
+      background: 'rgba(15,23,42,.45)',
+      fontFamily: 'system-ui,sans-serif',
+    });
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const storedBase = storeGet(LLM_BASE_URL_KEY, '');
+    const storedModel = storeGet(LLM_MODEL_KEY, '');
+    const curKey = getLlmApiKey();
+    const baseVal = (typeof storedBase === 'string' && storedBase.trim()) || DEFAULT_LLM_BASE_URL;
+    const modelVal = (typeof storedModel === 'string' && storedModel.trim()) || DEFAULT_LLM_MODEL;
+
+    shadow.innerHTML = `
+<style>
+  * { box-sizing: border-box; }
+  .card {
+    width: min(440px, 100%);
+    max-height: min(92vh, 720px);
+    overflow: auto;
+    background: #fff;
+    border-radius: 14px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.28);
+    padding: 18px 18px 16px;
+    color: #0f172a;
+  }
+  h2 { margin: 0 0 4px; font-size: 18px; font-weight: 700; }
+  .sub { margin: 0 0 14px; font-size: 12px; color: #64748b; line-height: 1.5; }
+  .badge {
+    display: inline-block;
+    margin-bottom: 12px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: #ecfdf5;
+    color: #047857;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    margin: 12px 0 6px;
+    color: #334155;
+  }
+  .hint { font-weight: 400; color: #94a3b8; font-size: 11px; }
+  input[type="text"], input[type="password"] {
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    font-size: 15px;
+    background: #f8fafc;
+  }
+  input:focus { outline: 2px solid #a78bfa; border-color: #7c3aed; background: #fff; }
+  .key-row { display: flex; gap: 8px; align-items: stretch; }
+  .key-row input { flex: 1; }
+  .key-status { margin-top: 6px; font-size: 12px; color: #64748b; }
+  .note {
+    margin: 12px 0 0;
+    padding: 10px 12px;
+    background: #f1f5f9;
+    border-radius: 10px;
+    font-size: 12px;
+    color: #475569;
+    line-height: 1.55;
+  }
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 16px;
+  }
+  button {
+    min-height: 44px;
+    padding: 10px 14px;
+    border: none;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+  .primary { background: #7c3aed; color: #fff; }
+  .secondary { background: #e2e8f0; color: #1e293b; }
+  .danger { background: #fee2e2; color: #b91c1c; }
+  .ghost { background: transparent; color: #64748b; margin-left: auto; }
+  .test-status {
+    margin-top: 12px;
+    min-height: 20px;
+    font-size: 13px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+  }
+  .ok { color: #047857; }
+  .err { color: #b91c1c; }
+  .info { color: #475569; }
+</style>
+<div class="card" role="dialog" aria-label="Sensebook LLM 设置">
+  <h2>LLM 设置</h2>
+  <p class="sub">Key 仅保存在本机油猴存储，不经过 Sensebook 服务器。可选同步设置请用独立菜单。</p>
+  <span class="badge">供应商：DeepSeek（当前仅支持）</span>
+
+  <label>Base URL <span class="hint">OpenAI 兼容 /v1 根路径</span></label>
+  <input type="text" id="base" autocomplete="off" spellcheck="false" />
+
+  <label>API Key</label>
+  <div class="key-row">
+    <input type="password" id="key" autocomplete="off" spellcheck="false" placeholder="sk-…" />
+    <button type="button" class="secondary" id="toggleKey">显示</button>
+  </div>
+  <div class="key-status" id="keyStatus"></div>
+
+  <label>模型 <span class="hint">默认 deepseek-flash，可改</span></label>
+  <input type="text" id="model" autocomplete="off" spellcheck="false" />
+
+  <div class="note">
+    Sensebook 的 Base URL 是 OpenAI 兼容的 <strong>/v1</strong> 根（例如 <code>https://api.deepseek.com/v1</code>），脚本会自动追加 <code>/chat/completions</code>，请勿填完整 completions 路径。
+  </div>
+
+  <div class="actions">
+    <button type="button" class="primary" id="save">保存</button>
+    <button type="button" class="secondary" id="test">测试连接</button>
+    <button type="button" class="danger" id="clearKey">清除 Key</button>
+    <button type="button" class="ghost" id="close">关闭</button>
+  </div>
+  <div class="test-status info" id="status"></div>
+</div>
+`;
+
+    const $ = (id) => shadow.getElementById(id);
+    const baseInput = $('base');
+    const keyInput = $('key');
+    const modelInput = $('model');
+    const keyStatus = $('keyStatus');
+    const statusEl = $('status');
+
+    baseInput.value = baseVal;
+    modelInput.value = modelVal;
+    keyInput.value = curKey;
+    keyStatus.textContent = '当前：' + maskApiKey(curKey);
+
+    function setStatus(msg, kind) {
+      statusEl.textContent = msg || '';
+      statusEl.className = 'test-status ' + (kind || 'info');
+    }
+
+    function readForm() {
+      return {
+        base: baseInput.value.trim().replace(/\/$/, ''),
+        key: keyInput.value.trim(),
+        model: modelInput.value.trim(),
+      };
+    }
+
+    $('toggleKey').onclick = () => {
+      const show = keyInput.type === 'password';
+      keyInput.type = show ? 'text' : 'password';
+      $('toggleKey').textContent = show ? '隐藏' : '显示';
+    };
+
+    $('close').onclick = () => hideLlmSettingsPanel();
+    host.addEventListener('click', (e) => {
+      if (e.target === host) hideLlmSettingsPanel();
+    });
+
+    $('save').onclick = () => {
+      const { base, key, model } = readForm();
+      storeSet(LLM_BASE_URL_KEY, base || DEFAULT_LLM_BASE_URL);
+      storeSet(LLM_API_KEY_KEY, key);
+      storeSet(LLM_MODEL_KEY, model || DEFAULT_LLM_MODEL);
+      // Reflect defaults in fields if user cleared
+      if (!base) baseInput.value = DEFAULT_LLM_BASE_URL;
+      if (!model) modelInput.value = DEFAULT_LLM_MODEL;
+      keyStatus.textContent = '当前：' + maskApiKey(key);
+      setStatus('已保存（本机）。' + (key ? '可用「测试连接」验证。' : '未填 Key 时 AI 释义仍用本地 stub。'), 'ok');
+      toast(key ? 'DeepSeek LLM 设置已保存' : '已保存（无 Key，将使用 stub）');
+    };
+
+    $('clearKey').onclick = () => {
+      storeSet(LLM_API_KEY_KEY, '');
+      keyInput.value = '';
+      keyStatus.textContent = '当前：' + maskApiKey('');
+      setStatus('已清除 API Key（Base URL / 模型保留）', 'ok');
+      toast('已清除 LLM API Key（本地词库不受影响）');
+    };
+
+    $('test').onclick = async () => {
+      const { base, key, model } = readForm();
+      const useBase = (base || DEFAULT_LLM_BASE_URL).replace(/\/$/, '');
+      const useModel = model || DEFAULT_LLM_MODEL;
+      if (!key) {
+        setStatus('请先填写 API Key 再测试。', 'err');
+        return;
+      }
+      setStatus('正在测试连接…', 'info');
+      $('test').disabled = true;
+      try {
+        const url = useBase + '/chat/completions';
+        const res = await gmRequest(url, {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + key },
+          body: {
+            model: useModel,
+            temperature: 0,
+            max_tokens: 8,
+            messages: [{ role: 'user', content: 'ping' }],
+          },
+        });
+        if (res.status >= 200 && res.status < 300) {
+          const reply = res.data?.choices?.[0]?.message?.content;
+          setStatus(
+            '连接成功（HTTP ' + res.status + '）。模型：' + useModel +
+              (reply ? '\n回复片段：' + String(reply).slice(0, 80) : ''),
+            'ok'
+          );
+        } else if (res.status === 401 || res.status === 403) {
+          const detail =
+            (res.data && (res.data.error?.message || res.data.error || res.data.message)) || '';
+          setStatus(
+            '鉴权失败（HTTP ' + res.status + '）。请检查 API Key。' +
+              (detail ? '\n' + String(detail).slice(0, 160) : ''),
+            'err'
+          );
+        } else {
+          const detail =
+            (res.data && (res.data.error?.message || res.data.error || res.data.message)) ||
+            (res.raw || '').slice(0, 160);
+          setStatus('请求失败（HTTP ' + res.status + '）。' + (detail ? '\n' + String(detail) : ''), 'err');
+        }
+      } catch (err) {
+        setStatus('网络错误：' + (err.message || String(err)) + '\n请检查 Base URL 与油猴 @connect。', 'err');
+      } finally {
+        $('test').disabled = false;
+      }
+    };
+
+    document.documentElement.appendChild(host);
+    llmPanelHost = host;
+    keyInput.focus();
+  }
+
+    function showLocalPanel() {
     hidePanel();
     const entries = loadEntries();
     panel = document.createElement('div');
@@ -795,7 +1039,7 @@
         } else {
           toast(
             (result.stub
-              ? '已本地存词并生成 stub 释义（菜单可填 LLM Key）：'
+              ? '已本地存词并生成 stub 释义（菜单「LLM 设置」可填 Key）：'
               : '已本地存词并 AI 释义：') + entry.word
           );
         }
