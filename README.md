@@ -16,6 +16,8 @@
 3. 之后每次推送 `main` 前更新 `@version`，油猴会按 `@updateURL` 检查更新（也可在插件里手动「检查更新」）。v1 之前统一使用 `0.1.<时间>`，时间为 Asia/Shanghai 的 `YYYYMMDDHHmm`；每次推送只递增时间部分。
 4. 划词弹层点 **DeepSeek**，填 DeepSeek API Key；也可在页面右下角 **Sensebook** FAB 中选择「DeepSeek 设置」或「我的生词」。未配置时右下角显示「配置 DeepSeek」，首次自动弹出。
 
+> **若右下角仍看不到 Sensebook 按钮**：打开浏览器控制台，看是否弹出 `Sensebook 脚本错误: …`（请把报错内容发出来）；并在 Tampermonkey/Violentmonkey 中确认该脚本已启用，且对当前网站没有被排除。也可在插件里对该脚本点「检查更新」。
+
 本地开发若已手动粘贴过旧脚本：删掉旧脚本后改用上面的链接重装，才能挂上自动更新。
 
 ## 最快上手（仅油猴，无需后端）

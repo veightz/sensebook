@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609151649
+// @version      0.1.202609151655
 // @description  划词翻译 / 存词 / AI 释义 — Sensebook（本地优先；DeepSeek LLM 设置面板）
 // @author       Sensebook
 // @match        *://*/*
@@ -15,12 +15,108 @@
 // @connect      localhost
 // @connect      *
 // @run-at       document-idle
+// @inject-into  content
 // ==/UserScript==
 
 (function () {
   'use strict';
 
-  const ENTRIES_KEY = 'sensebook_entries';
+  // ---- safe GM_* wrappers (never throw if grant/polyfill missing) ----
+  function gmGet(key, def) {
+    try {
+      if (typeof GM_getValue === 'function') return GM_getValue(key, def);
+    } catch { /* ignore */ }
+    return def;
+  }
+  function gmSet(key, val) {
+    try {
+      if (typeof GM_setValue === 'function') {
+        GM_setValue(key, val);
+        return true;
+      }
+    } catch { /* ignore */ }
+    return false;
+  }
+  function gmMenu(caption, fn) {
+    try {
+      if (typeof GM_registerMenuCommand === 'function') {
+        GM_registerMenuCommand(caption, fn);
+        return true;
+      }
+    } catch { /* ignore */ }
+    return false;
+  }
+  function gmXhr(details) {
+    try {
+      if (typeof GM_xmlhttpRequest === 'function') {
+        return GM_xmlhttpRequest(details);
+      }
+    } catch (err) {
+      if (details && typeof details.onerror === 'function') {
+        try { details.onerror(err); } catch { /* ignore */ }
+      }
+      return undefined;
+    }
+    if (details && typeof details.onerror === 'function') {
+      try { details.onerror(new Error('GM_xmlhttpRequest unavailable')); } catch { /* ignore */ }
+    }
+    return undefined;
+  }
+
+  let sensebookErrorAlerted = false;
+  function sensebookAlertError(err) {
+    try {
+      if (sensebookErrorAlerted) return;
+      sensebookErrorAlerted = true;
+      const msg = (err && err.message) ? err.message : String(err);
+      alert('Sensebook 脚本错误: ' + msg);
+    } catch { /* ignore */ }
+  }
+
+  function mountEmergencyFab() {
+    try {
+      if (document.getElementById('sensebook-fab-root')) return;
+      const root = document.createElement('div');
+      root.id = 'sensebook-fab-root';
+      Object.assign(root.style, {
+        position: 'fixed',
+        right: '16px',
+        bottom: '16px',
+        zIndex: '2147483647',
+      });
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = 'Sensebook 设置';
+      Object.assign(btn.style, {
+        minWidth: '120px',
+        minHeight: '48px',
+        padding: '12px 16px',
+        border: '2px solid #fff',
+        borderRadius: '999px',
+        background: '#dc2626',
+        color: '#fff',
+        boxShadow: '0 6px 20px rgba(0,0,0,.4)',
+        fontSize: '14px',
+        fontWeight: '800',
+        cursor: 'pointer',
+      });
+      btn.addEventListener('click', () => {
+        try {
+          if (typeof showLlmSettingsPanel === 'function') showLlmSettingsPanel();
+          else alert('Sensebook：请在油猴菜单打开 LLM 设置');
+        } catch (e) {
+          alert('Sensebook：' + ((e && e.message) || e));
+        }
+      });
+      root.appendChild(btn);
+      const mount = document.body || document.documentElement;
+      if (mount) mount.appendChild(root);
+    } catch { /* ignore */ }
+  }
+
+
+  try { // sensebook-main
+    const ENTRIES_KEY = 'sensebook_entries';
   const API_URL_KEY = 'sensebook_api_url';
   const TOKEN_KEY = 'sensebook_token';
   // LLM settings (local-only; separate from optional server sync)
@@ -37,13 +133,11 @@
     '只输出 JSON 对象：{"ai_sentence_gloss":"整句中文释义（简洁）","ai_word_sense":"该词在此句中的中文义项（含词性/用法提示，简洁）"}。' +
     '不要输出 Markdown 或其它文字。';
 
-  // ---- storage helpers (GM_* with localStorage fallback) ----
+  // ---- storage helpers (safe gmGet/gmSet + localStorage fallback) ----
   function storeGet(key, def) {
     try {
-      if (typeof GM_getValue === 'function') {
-        const v = GM_getValue(key, undefined);
-        if (v !== undefined && v !== null) return v;
-      }
+      const v = gmGet(key, undefined);
+      if (v !== undefined && v !== null) return v;
     } catch { /* ignore */ }
     try {
       const raw = localStorage.getItem(key);
@@ -55,12 +149,7 @@
   }
 
   function storeSet(key, val) {
-    try {
-      if (typeof GM_setValue === 'function') {
-        GM_setValue(key, val);
-        return;
-      }
-    } catch { /* ignore */ }
+    if (gmSet(key, val)) return;
     try {
       localStorage.setItem(key, typeof val === 'string' ? val : JSON.stringify(val));
     } catch { /* ignore */ }
@@ -193,45 +282,7 @@
     };
   }
 
-  // ---- menus ----
-  GM_registerMenuCommand('Sensebook：我的生词（本地）', () => {
-    showLocalPanel();
-  });
-
-  GM_registerMenuCommand('Sensebook：LLM 设置', () => {
-    showLlmSettingsPanel();
-  });
-
-  GM_registerMenuCommand('Sensebook：登录/同步（可选）— API 地址', () => {
-    const cur = getApiUrl();
-    const v = prompt(
-      '【可选】Sensebook API 地址\n本地模式无需填写。填写后用于可选同步/在线翻译。\n例如 http://127.0.0.1:8787',
-      cur || 'http://127.0.0.1:8787'
-    );
-    if (v != null) storeSet(API_URL_KEY, v.trim());
-  });
-
-  GM_registerMenuCommand('Sensebook：登录/同步（可选）— Token', () => {
-    const cur = getToken();
-    const v = prompt(
-      '【可选】JWT Token（网页登录后复制）\n本地存词不需要 Token。',
-      cur
-    );
-    if (v != null) storeSet(TOKEN_KEY, v.trim());
-  });
-
-  GM_registerMenuCommand('Sensebook：清除可选 Token', () => {
-    storeSet(TOKEN_KEY, '');
-    toast('已清除 Token（本地词库不受影响）');
-  });
-
-  GM_registerMenuCommand('Sensebook：关于本地模式', () => {
-    toast(
-      hasLlmConfig()
-        ? '本地优先：存词在本机；已配置 DeepSeek，AI 释义将直连模型'
-        : '默认本地优先：存词写入油猴存储。菜单「LLM 设置」填写 DeepSeek API Key 后可真实 AI 释义'
-    );
-  });
+  // Menus + FAB boot run at end (after function decls); safe gmMenu never aborts IIFE.
 
   let popup = null;
   let panel = null;
@@ -241,6 +292,7 @@
   let fabRoot = null;
   let fabSheet = null;
   let fabButton = null;
+  let onboardingScheduled = false;
 
   function toast(msg) {
     let el = document.getElementById('sensebook-toast');
@@ -261,12 +313,20 @@
         maxWidth: '90vw',
         pointerEvents: 'none',
       });
-      document.documentElement.appendChild(el);
+      (document.body || document.documentElement).appendChild(el);
     }
     el.textContent = msg;
     el.style.display = 'block';
     clearTimeout(el._t);
     el._t = setTimeout(() => { el.style.display = 'none'; }, 3200);
+  }
+
+  // Early FAB boot (function decls for setupFab* are hoisted; menus come later)
+  try {
+    setupFabAndOnboarding();
+  } catch (err) {
+    sensebookAlertError(err);
+    mountEmergencyFab();
   }
 
   function extractSentence(range) {
@@ -828,7 +888,7 @@
 
   function gmFetch(url, { method = 'GET', body, headers = {} } = {}) {
     return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
+      gmXhr({
         method,
         url,
         headers: {
@@ -859,7 +919,7 @@
   /** Raw GM request that returns status even for error codes (for retry logic). */
   function gmRequest(url, { method = 'GET', body, headers = {} } = {}) {
     return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
+      gmXhr({
         method,
         url,
         headers: {
@@ -1158,19 +1218,21 @@
   }
 
   function setupFab() {
-    if (fabRoot) return;
+    // Re-attach path may reset fabRoot=null while a stale node is gone
+    if (fabRoot && document.getElementById('sensebook-fab-root')) return;
     fabRoot = document.createElement('div');
     fabRoot.id = 'sensebook-fab-root';
     Object.assign(fabRoot.style, {
       position: 'fixed',
-      right: '14px',
-      bottom: 'max(14px, env(safe-area-inset-bottom))',
+      right: '16px',
+      bottom: '16px',
       zIndex: '2147483647',
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'flex-end',
       gap: '8px',
       fontFamily: 'system-ui,sans-serif',
+      pointerEvents: 'auto',
     });
 
     fabSheet = document.createElement('div');
@@ -1179,7 +1241,7 @@
       display: 'none',
       flexDirection: 'column',
       gap: '6px',
-      width: '154px',
+      width: '160px',
       padding: '8px',
       background: '#fff',
       border: '1px solid #e2e8f0',
@@ -1220,16 +1282,17 @@
     fabButton.setAttribute('data-sensebook-fab', 'true');
     fabButton.setAttribute('aria-expanded', 'false');
     Object.assign(fabButton.style, {
-      minWidth: '112px',
-      minHeight: '44px',
-      padding: '10px 14px',
-      border: 'none',
+      minWidth: '128px',
+      minHeight: '52px',
+      padding: '12px 18px',
+      border: '2px solid #fff',
       borderRadius: '999px',
       background: '#7c3aed',
       color: '#fff',
-      boxShadow: '0 4px 16px rgba(15,23,42,.28)',
-      fontSize: '13px',
-      fontWeight: '700',
+      boxShadow: '0 6px 22px rgba(124,58,237,.55), 0 2px 8px rgba(0,0,0,.25)',
+      fontSize: '15px',
+      fontWeight: '800',
+      letterSpacing: '0.02em',
       cursor: 'pointer',
       touchAction: 'manipulation',
     });
@@ -1246,7 +1309,7 @@
 
     fabRoot.appendChild(fabSheet);
     fabRoot.appendChild(fabButton);
-    const mount = document.documentElement || document.body;
+    const mount = document.body || document.documentElement;
     if (mount) mount.appendChild(fabRoot);
   }
 
@@ -1269,25 +1332,124 @@
   });
 
   function setupFabAndOnboarding() {
-    setupFab();
+    try {
+      setupFab();
+    } catch (err) {
+      sensebookAlertError(err);
+      mountEmergencyFab();
+      return;
+    }
+    if (onboardingScheduled) return;
     if (!hasLlmConfig() && !storeGet(ONBOARDING_DONE_KEY, false)) {
+      onboardingScheduled = true;
       setTimeout(() => {
-        if (hasLlmConfig() || storeGet(ONBOARDING_DONE_KEY, false)) return;
-        showLlmSettingsPanel();
-        toast('请配置 DeepSeek API Key');
+        try {
+          if (hasLlmConfig() || storeGet(ONBOARDING_DONE_KEY, false)) return;
+          showLlmSettingsPanel();
+          toast('请配置 DeepSeek API Key');
+        } catch (err) {
+          sensebookAlertError(err);
+        }
       }, 600);
     }
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', setupFabAndOnboarding, { once: true });
-  } else {
-    setupFabAndOnboarding();
+  function registerSensebookMenus() {
+    try {
+      gmMenu('Sensebook：我的生词（本地）', () => {
+        showLocalPanel();
+      });
+      gmMenu('Sensebook：LLM 设置', () => {
+        showLlmSettingsPanel();
+      });
+      gmMenu('Sensebook：登录/同步（可选）— API 地址', () => {
+        const cur = getApiUrl();
+        const v = prompt(
+          '【可选】Sensebook API 地址\n本地模式无需填写。填写后用于可选同步/在线翻译。\n例如 http://127.0.0.1:8787',
+          cur || 'http://127.0.0.1:8787'
+        );
+        if (v != null) storeSet(API_URL_KEY, v.trim());
+      });
+      gmMenu('Sensebook：登录/同步（可选）— Token', () => {
+        const cur = getToken();
+        const v = prompt(
+          '【可选】JWT Token（网页登录后复制）\n本地存词不需要 Token。',
+          cur
+        );
+        if (v != null) storeSet(TOKEN_KEY, v.trim());
+      });
+      gmMenu('Sensebook：清除可选 Token', () => {
+        storeSet(TOKEN_KEY, '');
+        toast('已清除 Token（本地词库不受影响）');
+      });
+      gmMenu('Sensebook：关于本地模式', () => {
+        toast(
+          hasLlmConfig()
+            ? '本地优先：存词在本机；已配置 DeepSeek，AI 释义将直连模型'
+            : '默认本地优先：存词写入油猴存储。菜单「LLM 设置」填写 DeepSeek API Key 后可真实 AI 释义'
+        );
+      });
+    } catch (err) {
+      // Menu registration must never prevent FAB from staying up
+      try { console.warn('[Sensebook] menu registration failed', err); } catch { /* ignore */ }
+    }
   }
+
+  function ensureFabAttached() {
+    try {
+      if (!document.getElementById('sensebook-fab-root')) {
+        fabRoot = null;
+        fabSheet = null;
+        fabButton = null;
+        setupFab();
+      }
+    } catch (err) {
+      sensebookAlertError(err);
+      mountEmergencyFab();
+    }
+  }
+
+  function startFabWatchdog() {
+    try {
+      setInterval(ensureFabAttached, 2000);
+    } catch { /* ignore */ }
+    try {
+      const obs = new MutationObserver(() => {
+        if (!document.getElementById('sensebook-fab-root')) {
+          fabRoot = null;
+          fabSheet = null;
+          fabButton = null;
+          try { setupFab(); } catch (err) {
+            sensebookAlertError(err);
+            mountEmergencyFab();
+          }
+        }
+      });
+      const root = document.documentElement || document.body;
+      if (root) obs.observe(root, { childList: true, subtree: true });
+    } catch { /* ignore */ }
+  }
+
+  // Boot order: FAB first (regardless of menus), then menus in try/catch
+  setupFabAndOnboarding();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      ensureFabAttached();
+      setupFabAndOnboarding();
+    }, { once: true });
+  }
+  registerSensebookMenus();
+  startFabWatchdog();
 
   // Expose parse helpers for optional page-console smoke (no export in userscript)
   try {
     window.__sensebookParseEnrichJson = parseEnrichJson;
     window.__sensebookBuildEnrichUserPrompt = buildEnrichUserPrompt;
   } catch { /* ignore */ }
+
+  } catch (err) { // sensebook-main
+    sensebookAlertError(err);
+    mountEmergencyFab();
+  }
+
 })();
