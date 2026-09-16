@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609161159
+// @version      0.1.202609161204
 // @description  划词自动查询 / 翻译 / 存词 / AI 释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -135,6 +135,9 @@
   const LOCAL_DICT_META_KEY = 'sensebook_local_dict_meta';
   const LOCAL_DICT_URL =
     'https://raw.githubusercontent.com/veightz/sensebook/main/userscript/dict/en-zh-common.json';
+  // Bump only when shipping a new dict JSON. Mismatch vs GM-cached payload.version
+  // triggers one refresh; unrelated @version bumps must NOT clear dict cache.
+  const LOCAL_DICT_EXPECTED_VERSION = '0.1.20260916-full20k';
   const LOCAL_DICT_SHORT_MAX = 20;
 
   const DEFAULT_LLM_BASE_URL = 'https://api.deepseek.com/v1';
@@ -337,18 +340,25 @@
 
   /**
    * Ensure local dict is in memory. Uses GM cache first; refreshes from repo when
-   * missing. Fetch failure → silent (caller falls back to model-only).
+   * missing or when cached.version !== LOCAL_DICT_EXPECTED_VERSION (dict ship only).
+   * Script @version bumps alone do not clear dict GM cache.
+   * Fetch failure → silent (caller falls back to model-only).
    * forceRefresh downloads even if cache present.
    */
   async function ensureLocalDict(opts) {
     const forceRefresh = !!(opts && opts.forceRefresh);
-    if (!forceRefresh && localDictMem && localDictMem.entries) return localDictMem;
+    if (!forceRefresh && localDictMem && localDictMem.entries) {
+      if (localDictMem.version === LOCAL_DICT_EXPECTED_VERSION) return localDictMem;
+      // Stale in-memory dict (expected version bumped) — fall through to refresh.
+      localDictMem = null;
+    }
     if (!forceRefresh) {
       const cached = readDictFromStore();
-      if (cached && cached.entries) {
+      if (cached && cached.entries && cached.version === LOCAL_DICT_EXPECTED_VERSION) {
         adoptDictPayload(cached);
         return localDictMem;
       }
+      // Version mismatch or empty → download; do not keep serving stale half pack.
     }
     if (localDictLoadPromise && !forceRefresh) return localDictLoadPromise;
 

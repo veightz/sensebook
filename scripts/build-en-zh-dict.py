@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build half-size EN→ZH common dict JSON from ECDICT (MIT).
+"""Build full-v1 EN→ZH common dict JSON from ECDICT (MIT).
 
 Usage:
   python3 scripts/build-en-zh-dict.py \\
@@ -17,10 +17,10 @@ import json
 import re
 from pathlib import Path
 
-TARGET = 10000
+TARGET = 20000
 MAX_LEN = 20
 MAX_GLOSS = 36
-DICT_VERSION = "0.1.20260916-half10k"
+DICT_VERSION = "0.1.20260916-full20k"
 TAG_BONUS = {
     "zk": 50,
     "gk": 40,
@@ -183,7 +183,7 @@ def main():
         "version": args.version,
         "source": "skywind3000/ECDICT (MIT) https://github.com/skywind3000/ECDICT",
         "license": "MIT",
-        "note": "Half-size UX trial (~10k). Dict version is independent of userscript @version.",
+        "note": "Full v1 ceiling (~20k, ≤1.5MB). Dict version is independent of userscript @version.",
         "count": len(entries),
         "entries": entries,
     }
