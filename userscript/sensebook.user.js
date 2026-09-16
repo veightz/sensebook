@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609161556
+// @version      0.1.202609161628
 // @description  划词自动查询 / 翻译 / 加入生词本 / AI 释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -708,9 +708,12 @@
   const inFlightByCacheKey = new Map(); // cacheKey -> Promise (dedupe)
   let fabRoot = null;
   let fabSheet = null;
+  let fabHoverBridge = null;
   let fabButton = null;
   let fabDragging = false;
   let fabDragSuppressUntil = 0;
+  let fabHoverCloseTimer = null;
+  const FAB_HOVER_CLOSE_DELAY_MS = 200;
   let onboardingScheduled = false;
 
   function eventInsideLlmSettings(e) {
@@ -2456,11 +2459,29 @@
     return !!(fabSheet && getStyleProp(fabSheet, 'display') !== 'none');
   }
 
+  function clearFabHoverCloseTimer() {
+    if (fabHoverCloseTimer != null) {
+      clearTimeout(fabHoverCloseTimer);
+      fabHoverCloseTimer = null;
+    }
+  }
+
+  function scheduleFabHoverClose() {
+    clearFabHoverCloseTimer();
+    fabHoverCloseTimer = setTimeout(() => {
+      fabHoverCloseTimer = null;
+      if (fabDragging) return;
+      hideFabSheet();
+    }, FAB_HOVER_CLOSE_DELAY_MS);
+  }
+
   function hideFabSheet() {
+    clearFabHoverCloseTimer();
     if (fabSheet) {
       setStyleProp(fabSheet, 'display', 'none');
       if (fabButton) fabButton.setAttribute('aria-expanded', 'false');
     }
+    if (fabHoverBridge) setStyleProp(fabHoverBridge, 'display', 'none');
   }
 
   /** Place compact sheet upward/inward so it never covers the FAB drag target. */
@@ -2471,7 +2492,9 @@
     if (!btn) return;
     const sheetW = fabSheet.offsetWidth || 120;
     const sheetH = fabSheet.offsetHeight || 120;
-    const gap = 6;
+    // Small visual gap; invisible bridge (+ delayed close) covers hit-testing dead zone.
+    const gap = 4;
+    const bridgePad = 8; // extends hit area across the gap toward the FAB
     const margin = 8;
     // Prefer expand upward (above FAB); if not enough room, expand downward below FAB.
     const spaceAbove = btn.top - margin;
@@ -2494,19 +2517,47 @@
     }
     // Keep sheet inward (toward viewport center) when near left edge
     const spaceRight = window.innerWidth - btn.right - margin;
+    let alignLeft = false;
     if (btn.left + btn.width < sheetW && spaceRight < sheetW) {
       // near left: align sheet's left to FAB left via left:0
       setStyleProp(fabSheet, 'right', 'auto');
       setStyleProp(fabSheet, 'left', '0');
+      alignLeft = true;
     } else {
       setStyleProp(fabSheet, 'left', 'auto');
       setStyleProp(fabSheet, 'right', '0');
+    }
+    // Invisible bridge fills FAB↔sheet gap so pointer never leaves the hover unit mid-travel.
+    if (fabHoverBridge) {
+      const bridgeH = gap + bridgePad;
+      if (openUp) {
+        applyStyles(fabHoverBridge, {
+          display: 'block',
+          left: alignLeft ? '0' : 'auto',
+          right: alignLeft ? 'auto' : '0',
+          top: 'auto',
+          bottom: Math.max(0, btn.height - bridgePad / 2) + 'px',
+          width: Math.max(btn.width, sheetW) + 'px',
+          height: bridgeH + 'px',
+        });
+      } else {
+        applyStyles(fabHoverBridge, {
+          display: 'block',
+          left: alignLeft ? '0' : 'auto',
+          right: alignLeft ? 'auto' : '0',
+          bottom: 'auto',
+          top: Math.max(0, btn.height - bridgePad / 2) + 'px',
+          width: Math.max(btn.width, sheetW) + 'px',
+          height: bridgeH + 'px',
+        });
+      }
     }
   }
 
   function openFabSheet() {
     if (!fabSheet || !fabButton) return;
     if (fabDragging || Date.now() < fabDragSuppressUntil) return;
+    clearFabHoverCloseTimer();
     setStyleProp(fabSheet, 'display', 'flex');
     positionFabSheet();
     fabButton.setAttribute('aria-expanded', 'true');
@@ -2686,6 +2737,17 @@
       pointerEvents: 'auto',
     });
 
+    fabHoverBridge = document.createElement('div');
+    fabHoverBridge.id = 'sensebook-fab-hover-bridge';
+    fabHoverBridge.setAttribute('aria-hidden', 'true');
+    applyStyles(fabHoverBridge, {
+      display: 'none',
+      position: 'absolute',
+      zIndex: '0',
+      pointerEvents: 'auto',
+      background: 'transparent',
+    });
+
     const makeAction = (label, onClick) => {
       const button = document.createElement('button');
       button.type = 'button';
@@ -2766,17 +2828,24 @@
 
     // Hover-to-expand only on clearly-identified desktop OS + fine pointer.
     // Android/iOS/uncertain: click/tap only (no hover auto-open).
+    // FAB + sheet (+ invisible bridge) are one hover unit: delay close so a brief
+    // gap transit does not collapse the menu before the pointer reaches a chip.
     fabRoot.addEventListener('pointerenter', (e) => {
       if (!canHoverExpandFab()) return;
       if (e.pointerType === 'touch') return;
       if (fabDragging || Date.now() < fabDragSuppressUntil) return;
       if (!hasLlmConfig()) return;
+      clearFabHoverCloseTimer();
       openFabSheet();
     });
     fabRoot.addEventListener('pointerleave', () => {
       if (!canHoverExpandFab()) return;
-      if (fabDragging) return;
-      hideFabSheet();
+      if (fabDragging) {
+        clearFabHoverCloseTimer();
+        hideFabSheet();
+        return;
+      }
+      scheduleFabHoverClose();
     });
 
     fabButton.addEventListener('click', (event) => {
@@ -2792,8 +2861,9 @@
     });
     updateFabState();
 
-    // FAB first in tree & higher z-index; sheet is absolute so it never pushes/covers the drag handle
+    // FAB first in tree & higher z-index; sheet/bridge are absolute so they never push/cover the drag handle
     fabRoot.appendChild(fabButton);
+    fabRoot.appendChild(fabHoverBridge);
     fabRoot.appendChild(fabSheet);
     const mount = document.body || document.documentElement;
     if (mount) mount.appendChild(fabRoot);
