@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609151818
+// @version      0.1.202609161135
 // @description  划词自动查询 / 翻译 / 存词 / AI 释义 — Sensebook（本地缓存与查询记录）
 // @author       Sensebook
 // @match        *://*/*
@@ -487,17 +487,17 @@
     Object.assign(el.style, {
       display: 'none',
       width: '100%',
-      marginTop: '2px',
-      padding: '8px 10px',
-      borderTop: '1px solid #e2e8f0',
+      marginTop: '4px',
+      padding: '10px 12px',
+      borderRadius: '8px',
+      background: '#f8fafc',
+      border: '1px solid #e2e8f0',
       fontSize: '13px',
-      lineHeight: '1.45',
-      color: '#334155',
+      lineHeight: '1.5',
+      color: '#0f172a',
       maxWidth: 'min(360px, calc(100vw - 32px))',
-      maxHeight: '160px',
+      maxHeight: '180px',
       overflow: 'auto',
-      whiteSpace: 'pre-wrap',
-      wordBreak: 'break-word',
       boxSizing: 'border-box',
     });
     popup.appendChild(el);
@@ -510,12 +510,68 @@
     const el = ensurePopupResultEl();
     if (!el) return;
     el.style.display = 'block';
-    el.textContent = msg || '';
-    if (kind === 'error') el.style.color = '#b91c1c';
-    else if (kind === 'loading') el.style.color = '#6d28d9';
-    else if (kind === 'hint') el.style.color = '#64748b';
-    else if (kind === 'cache') el.style.color = '#0f766e';
-    else el.style.color = '#334155';
+    el.style.background = '#f8fafc';
+    el.style.borderColor = '#e2e8f0';
+
+    const body = String(msg || '');
+    // Clear previous content
+    while (el.firstChild) el.removeChild(el.firstChild);
+
+    if (kind === 'cache') {
+      el.style.background = '#f0fdfa';
+      el.style.borderColor = '#ccfbf1';
+      const wrap = document.createElement('div');
+      Object.assign(wrap.style, {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '6px',
+      });
+      const meta = document.createElement('div');
+      Object.assign(meta.style, {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '4px',
+        fontSize: '11px',
+        lineHeight: '1.2',
+        color: '#94a3b8',
+        letterSpacing: '0.02em',
+      });
+      const dot = document.createElement('span');
+      Object.assign(dot.style, {
+        width: '6px',
+        height: '6px',
+        borderRadius: '50%',
+        background: '#5eead4',
+        flexShrink: '0',
+      });
+      const label = document.createElement('span');
+      label.textContent = '本地缓存';
+      meta.appendChild(dot);
+      meta.appendChild(label);
+      const text = document.createElement('div');
+      Object.assign(text.style, {
+        color: '#0f172a',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+      });
+      text.textContent = body;
+      wrap.appendChild(meta);
+      wrap.appendChild(text);
+      el.appendChild(wrap);
+      return;
+    }
+
+    const text = document.createElement('div');
+    Object.assign(text.style, {
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word',
+    });
+    text.textContent = body;
+    if (kind === 'error') text.style.color = '#b91c1c';
+    else if (kind === 'loading') text.style.color = '#6d28d9';
+    else if (kind === 'hint') text.style.color = '#64748b';
+    else text.style.color = '#0f172a';
+    el.appendChild(text);
   }
 
   function setPopupLoading(msg) {
@@ -1625,7 +1681,7 @@
     if (!forceRefresh) {
       const hit = getCachedByKey(makeCacheKey(word, sentence));
       if (hit && hit.translation) {
-        setPopupResult((hit.translation || '') + '\n（缓存）', 'cache');
+        setPopupResult(hit.translation || '', 'cache');
       } else {
         setPopupResult('查询中…', 'loading');
       }
@@ -1642,7 +1698,7 @@
       });
       if (reqId !== selectionGen) return; // stale
       const body = formatCacheResult(record) || '(空)';
-      setPopupResult(fromCache ? body + '\n（缓存）' : body, fromCache ? 'cache' : 'ok');
+      setPopupResult(body, fromCache ? 'cache' : 'ok');
     } catch (e) {
       if (reqId !== selectionGen) return;
       setPopupResult('翻译失败：' + (e.message || String(e)), 'error');
@@ -1662,7 +1718,7 @@
     const cacheKey = makeCacheKey(word, sentence);
     const hit = getCachedByKey(cacheKey);
     if (hit && hit.translation) {
-      setPopupResult(formatCacheResult(hit) + '\n（缓存）', 'cache');
+      setPopupResult(formatCacheResult(hit), 'cache');
       // still allow silent refresh? Spec: show instantly; still allow refresh via 翻译
       return;
     }
@@ -1685,7 +1741,7 @@
         });
         if (reqId !== selectionGen) return;
         const body = formatCacheResult(record) || '(空)';
-        setPopupResult(fromCache ? body + '\n（缓存）' : body, fromCache ? 'cache' : 'ok');
+        setPopupResult(body, fromCache ? 'cache' : 'ok');
         if (lastSel.rect) repositionPopup(lastSel.rect);
       } catch (e) {
         if (reqId !== selectionGen) return;
