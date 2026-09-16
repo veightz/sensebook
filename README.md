@@ -37,13 +37,34 @@ Chrome 138+ 需要单独打开油猴的用户脚本权限，否则脚本显示�
 1. 安装 [Tampermonkey](https://www.tampermonkey.net/)。
 2. 新建脚本，粘贴 [`userscript/sensebook.user.js`](userscript/sensebook.user.js) 全文并保存。
 3. 打开任意网页划选单词：
-   - **选中自动查询**（默认开）→ 划词弹层出现后约 0.35 秒自动轻量翻译，结果展示在按钮下方；可在 LLM 设置或 FAB 中开关（键名 `sensebook_auto_query`）
+   - **选中自动查询**（默认开）→ 短词先出「本地词库」释义，模型并行补第二行（「查询中…」）；整句仅模型。可在 LLM 设置或 FAB 中开关（键名 `sensebook_auto_query`）
    - **翻译** → 弹层结果区显示译文；命中本地缓存则即时回看，可再点翻译强制刷新
    - **存词** → 写入本地生词本（键名 `sensebook_entries`），**无需 API / Token**
    - **AI释义** → 已配置 DeepSeek Key 时直连生成真实释义；未配置时使用本地 stub；成功结果也会写入查询缓存
 4. 油猴菜单 / FAB：**「我的生词」**、**「查询记录」**（本地缓存 `sensebook_query_cache`，约 250 条 LRU）、**「LLM 设置」**。也可从划词弹层的 **DeepSeek** / **生词** 进入。
 
 本地模式说明也会在菜单「关于本地模式」中提示。登录相关菜单标注为 **「登录/同步（可选）」**。
+
+
+## 本地词库（EN→ZH，与脚本版本独立）
+
+划选**短词**（单 token、无空格、长度 ≤~20、拉丁字母为主）时：
+
+1. **本地词库**行立刻显示简洁中文释义（GM 缓存；轻量词干 `-s/-ed/-ing`）
+2. **模型**行并行查询，先显示「查询中…」，完成后单独占一行，**不会覆盖**本地行
+3. 本地未命中或整句/多词 → 仅模型
+
+词库文件：[`userscript/dict/en-zh-common.json`](userscript/dict/en-zh-common.json)（约半量 UX 试装：~10k 词 / ≤~0.8MB）。脚本启动后通过 `GM_xmlhttpRequest` 异步下载并写入 `GM_setValue`：
+
+| 存储键 | 用途 |
+|--------|------|
+| `sensebook_local_dict_data` | 词库 JSON 正文 |
+| `sensebook_local_dict_meta` | 仅记录 **dict `version`**、条目数、拉取时间 |
+
+**重要**：油猴脚本的 `@version`（如 `0.1.YYYYMMDDHHmm`）与 JSON 内的 **`version`（dict version）相互独立**。推送脚本只改 `@version` **不会**清空词库缓存；只有菜单「清除本地词库缓存」或词库文件自身 `version` 变化后的刷新才会动到这两把键。
+
+数据来源与许可见 [`userscript/dict/SOURCE.md`](userscript/dict/SOURCE.md)（ECDICT · MIT）。下载失败时静默回退为仅模型。油猴菜单提供「刷新本地词库」「清除本地词库缓存」。
+
 
 ## 配置真实 AI 释义（DeepSeek）
 
@@ -153,11 +174,14 @@ npm test
 ## 目录结构
 
 ```
-docs/schema.md           # 数据模型（含本地优先说明）
-server/                  # Hono API + SQLite（可选）
-web/index.html           # 词库页（可选；支持未登录时浏览本页 localStorage）
-userscript/sensebook.user.js  # 主路径：本地优先划词 + 可选直连 LLM
-scripts/test-llm-parse.mjs    # prompt / JSON 解析烟测
+docs/schema.md                    # 数据模型（含本地优先说明）
+server/                           # Hono API + SQLite（可选）
+web/index.html                    # 词库页（可选；支持未登录时浏览本页 localStorage）
+userscript/sensebook.user.js      # 主路径：本地优先划词 + 本地词库/模型双出
+userscript/dict/en-zh-common.json # 半量 EN→ZH 本地词库（dict version ≠ @version）
+userscript/dict/SOURCE.md         # 词库来源与许可（ECDICT MIT）
+scripts/build-en-zh-dict.py       # 从 ECDICT 构建词库子集
+scripts/test-llm-parse.mjs        # prompt / JSON 解析烟测
 .env.example
 ```
 

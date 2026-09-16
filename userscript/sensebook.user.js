@@ -3,8 +3,8 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609161142
-// @description  划词自动查询 / 翻译 / 存词 / AI 释义 — Sensebook（本地缓存与查询记录）
+// @version      0.1.202609161159
+// @description  划词自动查询 / 翻译 / 存词 / AI 释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
 // @grant        GM_getValue
@@ -129,6 +129,14 @@
   const QUERY_CACHE_CAP = 250;
   const AUTO_QUERY_DEBOUNCE_MS = 350;
 
+  // Local EN→ZH dict (async file from repo). Keys are INDEPENDENT of userscript @version
+  // so bumping the script never clears the dict GM cache.
+  const LOCAL_DICT_DATA_KEY = 'sensebook_local_dict_data';
+  const LOCAL_DICT_META_KEY = 'sensebook_local_dict_meta';
+  const LOCAL_DICT_URL =
+    'https://raw.githubusercontent.com/veightz/sensebook/main/userscript/dict/en-zh-common.json';
+  const LOCAL_DICT_SHORT_MAX = 20;
+
   const DEFAULT_LLM_BASE_URL = 'https://api.deepseek.com/v1';
   const DEFAULT_LLM_MODEL = 'deepseek-flash';
 
@@ -205,6 +213,177 @@
   function setAutoQueryEnabled(on) {
     storeSet(AUTO_QUERY_KEY, !!on);
   }
+
+  // ---- Local dict (GM cache; versioned independently of @version) ----
+  let localDictMem = null; // { version, entries: Map-like object }
+  let localDictLoadPromise = null;
+
+  function isShortWordToken(text) {
+    const t = String(text || '').trim();
+    if (!t || /\s/.test(t)) return false;
+    if (t.length > LOCAL_DICT_SHORT_MAX) return false;
+    return /^[A-Za-z][A-Za-z\-']*$/.test(t);
+  }
+
+  /** Light stemming only: -s / -ed / -ing (+ simple -ies). */
+  function stemCandidates(word) {
+    const w = String(word || '').toLowerCase();
+    const out = [];
+    const push = (x) => {
+      if (x && x.length >= 2 && !out.includes(x)) out.push(x);
+    };
+    push(w);
+    if (w.endsWith('ies') && w.length > 4) push(w.slice(0, -3) + 'y');
+    if (w.endsWith('es') && w.length > 3 && !w.endsWith('ss')) push(w.slice(0, -2));
+    if (w.endsWith('s') && !w.endsWith('ss') && w.length > 2) push(w.slice(0, -1));
+    if (w.endsWith('ing') && w.length > 5) {
+      push(w.slice(0, -3));
+      push(w.slice(0, -3) + 'e');
+      if (w.length > 6 && w[w.length - 4] === w[w.length - 5]) {
+        push(w.slice(0, -4)); // running -> run
+      }
+    }
+    if (w.endsWith('ed') && w.length > 3) {
+      push(w.slice(0, -2));
+      push(w.slice(0, -1)); // liked -> like-ish via -e keep
+      if (w.length > 4 && w[w.length - 3] === w[w.length - 4]) {
+        push(w.slice(0, -3)); // stopped -> stop
+      }
+    }
+    return out;
+  }
+
+  function formatLocalGloss(entry) {
+    if (!entry) return '';
+    if (typeof entry === 'string') return entry;
+    const g = entry.g || entry.gloss || '';
+    const p = entry.p || entry.pos || '';
+    if (p && g) return p + ' ' + g;
+    return g || '';
+  }
+
+  function lookupLocalDictSync(word) {
+    if (!localDictMem || !localDictMem.entries) return null;
+    const entries = localDictMem.entries;
+    for (const cand of stemCandidates(word)) {
+      const hit = entries[cand];
+      if (hit) {
+        return { word: cand, gloss: formatLocalGloss(hit), entry: hit };
+      }
+    }
+    return null;
+  }
+
+  function readDictFromStore() {
+    try {
+      const data = storeGet(LOCAL_DICT_DATA_KEY, null);
+      if (!data) return null;
+      if (typeof data === 'string') {
+        try {
+          return JSON.parse(data);
+        } catch {
+          return null;
+        }
+      }
+      if (data && typeof data === 'object' && data.entries) return data;
+    } catch { /* ignore */ }
+    return null;
+  }
+
+  function persistDictToStore(payload) {
+    // Store full payload under DATA key; META only tracks dict.version (NOT script @version).
+    storeSet(LOCAL_DICT_DATA_KEY, payload);
+    storeSet(LOCAL_DICT_META_KEY, {
+      dictVersion: payload.version || '',
+      count: payload.count || (payload.entries ? Object.keys(payload.entries).length : 0),
+      fetchedAt: Date.now(),
+      source: payload.source || '',
+    });
+  }
+
+  function clearLocalDictCache() {
+    storeSet(LOCAL_DICT_DATA_KEY, null);
+    storeSet(LOCAL_DICT_META_KEY, null);
+    localDictMem = null;
+    localDictLoadPromise = null;
+  }
+
+  function adoptDictPayload(payload) {
+    if (!payload || typeof payload !== 'object' || !payload.entries) return false;
+    localDictMem = payload;
+    return true;
+  }
+
+  function gmGetText(url) {
+    return new Promise((resolve, reject) => {
+      const h = gmXhr({
+        method: 'GET',
+        url,
+        timeout: 60000,
+        onload(res) {
+          if (res.status >= 200 && res.status < 300) resolve(res.responseText || '');
+          else reject(new Error('dict HTTP ' + res.status));
+        },
+        onerror() {
+          reject(new Error('dict network error'));
+        },
+        ontimeout() {
+          reject(new Error('dict timeout'));
+        },
+      });
+      if (h === undefined) reject(new Error('GM_xmlhttpRequest unavailable'));
+    });
+  }
+
+  /**
+   * Ensure local dict is in memory. Uses GM cache first; refreshes from repo when
+   * missing. Fetch failure → silent (caller falls back to model-only).
+   * forceRefresh downloads even if cache present.
+   */
+  async function ensureLocalDict(opts) {
+    const forceRefresh = !!(opts && opts.forceRefresh);
+    if (!forceRefresh && localDictMem && localDictMem.entries) return localDictMem;
+    if (!forceRefresh) {
+      const cached = readDictFromStore();
+      if (cached && cached.entries) {
+        adoptDictPayload(cached);
+        return localDictMem;
+      }
+    }
+    if (localDictLoadPromise && !forceRefresh) return localDictLoadPromise;
+
+    localDictLoadPromise = (async () => {
+      try {
+        const text = await gmGetText(LOCAL_DICT_URL);
+        const payload = JSON.parse(text);
+        if (!payload || !payload.entries) throw new Error('invalid dict json');
+        persistDictToStore(payload);
+        adoptDictPayload(payload);
+        return localDictMem;
+      } catch (err) {
+        // Silent fallback to model — keep any previous memory/cache.
+        try {
+          console.warn('[Sensebook] local dict fetch failed', err);
+        } catch { /* ignore */ }
+        if (!localDictMem) {
+          const cached = readDictFromStore();
+          if (cached) adoptDictPayload(cached);
+        }
+        return localDictMem;
+      } finally {
+        localDictLoadPromise = null;
+      }
+    })();
+    return localDictLoadPromise;
+  }
+
+  function getLocalDictStatusText() {
+    const meta = storeGet(LOCAL_DICT_META_KEY, null) || {};
+    const ver = (localDictMem && localDictMem.version) || meta.dictVersion || '未加载';
+    const n = (localDictMem && localDictMem.count) || meta.count || 0;
+    return '词库 ' + ver + (n ? ' · ' + n + ' 词' : '');
+  }
+
 
   function uuid() {
     if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
@@ -488,7 +667,7 @@
       display: 'none',
       width: '100%',
       marginTop: '4px',
-      padding: '10px 12px',
+      padding: '8px 10px',
       borderRadius: '8px',
       background: '#f8fafc',
       border: '1px solid #e2e8f0',
@@ -496,69 +675,116 @@
       lineHeight: '1.5',
       color: '#0f172a',
       maxWidth: 'min(360px, calc(100vw - 32px))',
-      maxHeight: '180px',
+      maxHeight: '220px',
       overflow: 'auto',
       boxSizing: 'border-box',
     });
+    const localRow = document.createElement('div');
+    localRow.setAttribute('data-slot', 'local');
+    localRow.style.display = 'none';
+    const modelRow = document.createElement('div');
+    modelRow.setAttribute('data-slot', 'model');
+    modelRow.style.display = 'none';
+    el.appendChild(localRow);
+    el.appendChild(modelRow);
     popup.appendChild(el);
     popupResultEl = el;
     return el;
   }
 
-  /** kind: 'loading' | 'ok' | 'cache' | 'error' | 'hint' */
-  function setPopupResult(msg, kind) {
+  function resetPopupResultSlots() {
     const el = ensurePopupResultEl();
     if (!el) return;
-    el.style.display = 'block';
+    el.style.display = 'none';
     el.style.background = '#f8fafc';
     el.style.borderColor = '#e2e8f0';
+    const localRow = el.querySelector('[data-slot="local"]');
+    const modelRow = el.querySelector('[data-slot="model"]');
+    if (localRow) {
+      localRow.style.display = 'none';
+      while (localRow.firstChild) localRow.removeChild(localRow.firstChild);
+    }
+    if (modelRow) {
+      modelRow.style.display = 'none';
+      while (modelRow.firstChild) modelRow.removeChild(modelRow.firstChild);
+    }
+  }
+
+  function _paintMetaHint(parent, label, dotColor) {
+    const meta = document.createElement('div');
+    Object.assign(meta.style, {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '4px',
+      fontSize: '11px',
+      lineHeight: '1.2',
+      color: '#94a3b8',
+      letterSpacing: '0.02em',
+      marginBottom: '4px',
+    });
+    const dot = document.createElement('span');
+    Object.assign(dot.style, {
+      width: '6px',
+      height: '6px',
+      borderRadius: '50%',
+      background: dotColor || '#94a3b8',
+      flexShrink: '0',
+    });
+    const lab = document.createElement('span');
+    lab.textContent = label;
+    meta.appendChild(dot);
+    meta.appendChild(lab);
+    parent.appendChild(meta);
+  }
+
+  /** Local dict row — never overwritten by model row. */
+  function setLocalDictRow(gloss) {
+    const el = ensurePopupResultEl();
+    if (!el) return;
+    const localRow = el.querySelector('[data-slot="local"]');
+    if (!localRow) return;
+    while (localRow.firstChild) localRow.removeChild(localRow.firstChild);
+    if (!gloss) {
+      localRow.style.display = 'none';
+      const modelRow = el.querySelector('[data-slot="model"]');
+      if (!modelRow || modelRow.style.display === 'none') el.style.display = 'none';
+      return;
+    }
+    el.style.display = 'block';
+    localRow.style.display = 'block';
+    Object.assign(localRow.style, {
+      marginBottom: '8px',
+      paddingBottom: '8px',
+      borderBottom: '1px solid #e2e8f0',
+    });
+    _paintMetaHint(localRow, '本地词库', '#38bdf8');
+    const text = document.createElement('div');
+    Object.assign(text.style, {
+      color: '#0f172a',
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word',
+    });
+    text.textContent = String(gloss);
+    localRow.appendChild(text);
+  }
+
+  /** Model / cache / error row — independent of local dict row. */
+  function setModelRow(msg, kind) {
+    const el = ensurePopupResultEl();
+    if (!el) return;
+    const modelRow = el.querySelector('[data-slot="model"]');
+    if (!modelRow) return;
+    el.style.display = 'block';
+    modelRow.style.display = 'block';
+    while (modelRow.firstChild) modelRow.removeChild(modelRow.firstChild);
 
     const body = String(msg || '');
-    // Clear previous content
-    while (el.firstChild) el.removeChild(el.firstChild);
-
     if (kind === 'cache') {
-      el.style.background = '#f0fdfa';
-      el.style.borderColor = '#ccfbf1';
-      const wrap = document.createElement('div');
-      Object.assign(wrap.style, {
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '6px',
-      });
-      const meta = document.createElement('div');
-      Object.assign(meta.style, {
-        display: 'flex',
-        alignItems: 'center',
-        gap: '4px',
-        fontSize: '11px',
-        lineHeight: '1.2',
-        color: '#94a3b8',
-        letterSpacing: '0.02em',
-      });
-      const dot = document.createElement('span');
-      Object.assign(dot.style, {
-        width: '6px',
-        height: '6px',
-        borderRadius: '50%',
-        background: '#5eead4',
-        flexShrink: '0',
-      });
-      const label = document.createElement('span');
-      label.textContent = '本地缓存';
-      meta.appendChild(dot);
-      meta.appendChild(label);
-      const text = document.createElement('div');
-      Object.assign(text.style, {
-        color: '#0f172a',
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-word',
-      });
-      text.textContent = body;
-      wrap.appendChild(meta);
-      wrap.appendChild(text);
-      el.appendChild(wrap);
-      return;
+      _paintMetaHint(modelRow, '本地缓存', '#5eead4');
+    } else if (kind === 'loading') {
+      _paintMetaHint(modelRow, '模型', '#c4b5fd');
+    } else if (kind === 'ok') {
+      _paintMetaHint(modelRow, '模型', '#a78bfa');
     }
 
     const text = document.createElement('div');
@@ -571,12 +797,22 @@
     else if (kind === 'loading') text.style.color = '#6d28d9';
     else if (kind === 'hint') text.style.color = '#64748b';
     else text.style.color = '#0f172a';
-    el.appendChild(text);
+    modelRow.appendChild(text);
+  }
+
+  /**
+   * Backward-compatible single-block setter.
+   * Writes the model row (does not clear a visible local dict row).
+   * kind: 'loading' | 'ok' | 'cache' | 'error' | 'hint'
+   */
+  function setPopupResult(msg, kind) {
+    setModelRow(msg, kind);
   }
 
   function setPopupLoading(msg) {
-    setPopupResult(msg || '查询中…', 'loading');
+    setModelRow(msg || '查询中…', 'loading');
   }
+
 
   function repositionPopup(rect) {
     if (!popup || !rect) return;
@@ -652,6 +888,7 @@
 
     popup.appendChild(popupBtnRow);
     ensurePopupResultEl();
+    resetPopupResultSlots();
     document.documentElement.appendChild(popup);
     repositionPopup(rect);
   }
@@ -1663,26 +1900,44 @@
     const reqId = selectionGen;
     const text = word || sentence;
     if (!text) {
+      resetPopupResultSlots();
       setPopupResult('没有可翻译文本', 'error');
       return;
     }
 
+    const short = isShortWordToken(word);
+    let localHit = null;
+    if (short) {
+      await ensureLocalDict();
+      if (reqId !== selectionGen) return;
+      localHit = lookupLocalDictSync(word);
+      if (localHit) setLocalDictRow(localHit.gloss);
+      else setLocalDictRow(null);
+    } else {
+      setLocalDictRow(null);
+    }
+
     if (!hasLlmConfig() && !hasOptionalApi()) {
-      const stub = clientStubTranslate(text);
-      setPopupResult(stub, 'hint');
-      toast('请先配置 DeepSeek');
+      if (localHit) {
+        // Local-only OK; light hint for model
+        setModelRow('已显示本地词库；配置 DeepSeek 后可并行补全', 'hint');
+      } else {
+        const stub = clientStubTranslate(text);
+        setPopupResult(stub, 'hint');
+        toast('请先配置 DeepSeek');
+      }
       return;
     }
 
     if (!forceRefresh) {
       const hit = getCachedByKey(makeCacheKey(word, sentence));
       if (hit && hit.translation) {
-        setPopupResult(hit.translation || '', 'cache');
+        setModelRow(formatCacheResult(hit) || hit.translation || '', 'cache');
       } else {
-        setPopupResult('查询中…', 'loading');
+        setModelRow('查询中…', 'loading');
       }
     } else {
-      setPopupResult('查询中…', 'loading');
+      setModelRow('查询中…', 'loading');
     }
 
     try {
@@ -1694,10 +1949,14 @@
       });
       if (reqId !== selectionGen) return; // stale
       const body = formatCacheResult(record) || '(空)';
-      setPopupResult(body, fromCache ? 'cache' : 'ok');
+      setModelRow(body, fromCache ? 'cache' : 'ok');
     } catch (e) {
       if (reqId !== selectionGen) return;
-      setPopupResult('翻译失败：' + (e.message || String(e)), 'error');
+      if (localHit) {
+        setModelRow('模型失败：' + (e.message || String(e)), 'error');
+      } else {
+        setModelRow('翻译失败：' + (e.message || String(e)), 'error');
+      }
     }
   }
 
@@ -1711,23 +1970,47 @@
     const sentence = lastSel.sentence || lastSel.text;
     if (!word) return;
 
+    const short = isShortWordToken(word);
+
+    // Kick local dict immediately for short tokens (dual-out path).
+    const localReady = (async () => {
+      if (!short) return null;
+      await ensureLocalDict();
+      if (reqId !== selectionGen) return null;
+      const hit = lookupLocalDictSync(word);
+      if (hit) setLocalDictRow(hit.gloss);
+      return hit;
+    })();
+
     const cacheKey = makeCacheKey(word, sentence);
-    const hit = getCachedByKey(cacheKey);
-    if (hit && hit.translation) {
-      setPopupResult(formatCacheResult(hit), 'cache');
-      // still allow silent refresh? Spec: show instantly; still allow refresh via 翻译
-      return;
-    }
+    const cacheHit = getCachedByKey(cacheKey);
 
-    if (!hasLlmConfig()) {
-      setPopupResult('已配置自动查询，请先点「配置 DeepSeek」填写 API Key', 'hint');
-      return;
-    }
-
-    setPopupResult('查询中…', 'loading');
     autoQueryTimer = setTimeout(async () => {
       autoQueryTimer = null;
       if (reqId !== selectionGen) return;
+
+      let localHit = null;
+      try {
+        localHit = await localReady;
+      } catch { /* ignore */ }
+      if (reqId !== selectionGen) return;
+
+      if (cacheHit && cacheHit.translation) {
+        setModelRow(formatCacheResult(cacheHit), 'cache');
+        // Still keep local row if present; no forced network refresh.
+        return;
+      }
+
+      if (!hasLlmConfig()) {
+        if (localHit) {
+          setModelRow('本地词库已命中；配置 DeepSeek 后可并行显示模型释义', 'hint');
+        } else {
+          setModelRow('已配置自动查询，请先点「配置 DeepSeek」填写 API Key', 'hint');
+        }
+        return;
+      }
+
+      setModelRow('查询中…', 'loading');
       try {
         const { record, fromCache } = await runTranslateLookup({
           word,
@@ -1737,11 +2020,15 @@
         });
         if (reqId !== selectionGen) return;
         const body = formatCacheResult(record) || '(空)';
-        setPopupResult(body, fromCache ? 'cache' : 'ok');
+        setModelRow(body, fromCache ? 'cache' : 'ok');
         if (lastSel.rect) repositionPopup(lastSel.rect);
       } catch (e) {
         if (reqId !== selectionGen) return;
-        setPopupResult('自动查询失败：' + (e.message || String(e)), 'error');
+        if (localHit) {
+          setModelRow('模型失败：' + (e.message || String(e)), 'error');
+        } else {
+          setModelRow('自动查询失败：' + (e.message || String(e)), 'error');
+        }
       }
     }, AUTO_QUERY_DEBOUNCE_MS);
   }
@@ -2112,11 +2399,27 @@
         storeSet(TOKEN_KEY, '');
         toast('已清除 Token（本地词库不受影响）');
       });
+      gmMenu('Sensebook：刷新本地词库', async () => {
+        try {
+          toast('正在下载本地词库…');
+          const d = await ensureLocalDict({ forceRefresh: true });
+          if (d && d.entries) toast('词库已刷新：' + getLocalDictStatusText());
+          else toast('词库下载失败，已保留旧缓存（若有）');
+        } catch (e) {
+          toast('词库刷新失败：' + (e.message || e));
+        }
+      });
+      gmMenu('Sensebook：清除本地词库缓存', () => {
+        clearLocalDictCache();
+        toast('已清除本地词库缓存（脚本 @version / 生词本不受影响）');
+      });
       gmMenu('Sensebook：关于本地模式', () => {
         toast(
-          hasLlmConfig()
+          (hasLlmConfig()
             ? '本地优先：存词在本机；已配置 DeepSeek，AI 释义将直连模型'
-            : '默认本地优先：存词写入油猴存储。菜单「LLM 设置」填写 DeepSeek API Key 后可真实 AI 释义'
+            : '默认本地优先：存词写入油猴存储。菜单「LLM 设置」填写 DeepSeek API Key 后可真实 AI 释义') +
+            ' · ' + getLocalDictStatusText() +
+            '（dict version 与脚本 @version 独立）'
         );
       });
     } catch (err) {
@@ -2169,6 +2472,7 @@
     }, { once: true });
   }
   registerSensebookMenus();
+  try { ensureLocalDict(); } catch { /* ignore */ }
   startFabWatchdog();
 
   // Expose parse helpers for optional page-console smoke (no export in userscript)
