@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609162324
+// @version      0.1.202609162340
 // @description  划词自动查询 / 翻译 / 加入生词本 / 存本并释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -367,10 +367,11 @@
     );
   }
 
-  /** When sense auto-query runs, optionally write vocab. Default OFF. */
+  /** When auto-query runs, optionally write vocab. Default ON (missing/undefined => true). */
   function isAutoSaveVocabEnabled() {
-    const v = storeGet(AUTO_SAVE_VOCAB_KEY, false);
-    return v === true || v === 'true' || v === 1 || v === '1';
+    const v = storeGet(AUTO_SAVE_VOCAB_KEY, true);
+    if (v === false || v === 'false' || v === 0 || v === '0') return false;
+    return true;
   }
 
   function setAutoSaveVocabEnabled(on) {
@@ -1610,7 +1611,7 @@
       <input type="checkbox" id="autoSaveVocab" style="width:18px;height:18px;" />
       自动加入生词本
     </label>
-    <div class="hint" style="margin-top:4px;">仅在「语境释义」路径生效；默认关闭（只展示、不写入生词本）。</div>
+    <div class="hint" style="margin-top:4px;">默认开启：自动查询（语境释义 / 翻译）成功后写入生词本；关闭后只展示、不自动入库。</div>
   </div>
 
   <label style="display:flex;align-items:center;gap:8px;font-weight:600;margin-top:14px;">
@@ -1653,18 +1654,14 @@
     const curMode = getAutoQueryMode();
     if (modeSenseInput) modeSenseInput.checked = curMode === AUTO_QUERY_MODE_SENSE;
     if (modeTranslateInput) modeTranslateInput.checked = curMode === AUTO_QUERY_MODE_TRANSLATE;
-    if (autoSaveVocabInput) autoSaveVocabInput.checked = isAutoSaveVocabEnabled();
-    function syncAutoSaveVocabEnabled() {
-      const senseOn = !!(modeSenseInput && modeSenseInput.checked);
-      if (autoSaveVocabInput) autoSaveVocabInput.disabled = !senseOn;
-      if (autoSaveVocabLabel) {
-        autoSaveVocabLabel.style.opacity = senseOn ? '1' : '0.45';
-        autoSaveVocabLabel.style.pointerEvents = senseOn ? 'auto' : 'none';
-      }
+    if (autoSaveVocabInput) {
+      autoSaveVocabInput.checked = isAutoSaveVocabEnabled();
+      autoSaveVocabInput.disabled = false;
     }
-    if (modeSenseInput) modeSenseInput.addEventListener('change', syncAutoSaveVocabEnabled);
-    if (modeTranslateInput) modeTranslateInput.addEventListener('change', syncAutoSaveVocabEnabled);
-    syncAutoSaveVocabEnabled();
+    if (autoSaveVocabLabel) {
+      autoSaveVocabLabel.style.opacity = '1';
+      autoSaveVocabLabel.style.pointerEvents = 'auto';
+    }
     const thinkingInput = $('llmThinking');
     if (thinkingInput) thinkingInput.checked = isLlmThinkingEnabled();
     const card = shadow.querySelector('.card');
@@ -2614,7 +2611,7 @@
 
     const mode = getAutoQueryMode();
 
-    // ---- 语境释义 path (default): enrich display; vocab write only if auto-save on ----
+    // ---- 语境释义 path (default): enrich display; vocab write if auto-save on ----
     if (mode === AUTO_QUERY_MODE_SENSE) {
       const cacheKey = makeCacheKey(word, sentence);
       const cacheHit = getCachedByKey(cacheKey);
@@ -2651,7 +2648,7 @@
           }, 'ok');
           if (lastSel.rect) repositionPopup(lastSel.rect);
 
-          // Optional vocab write (default off). Skip cache hits to avoid flooding 生词本.
+          // Optional vocab write (default on). Skip cache hits to avoid flooding 生词本.
           if (isAutoSaveVocabEnabled() && !fromCache) {
             try {
               const entry = createLocalEntry({
@@ -2688,7 +2685,7 @@
       return;
     }
 
-    // ---- 翻译 path: dual-out local dict + model translation (no vocab write) ----
+    // ---- 翻译 path: dual-out local dict + model translation; vocab write if auto-save on ----
     const short = isShortWordToken(word);
 
     // Kick local dict immediately for short tokens (dual-out path).
@@ -2741,6 +2738,36 @@
         const body = formatTranslateResult(record) || '(空)';
         setModelRow(body, fromCache ? 'cache' : 'ok');
         if (lastSel.rect) repositionPopup(lastSel.rect);
+
+        // Optional vocab write (default on). Skip cache hits to avoid flooding 生词本.
+        if (isAutoSaveVocabEnabled() && !fromCache) {
+          try {
+            const entry = createLocalEntry({
+              word,
+              sentence,
+              source_url: location.href,
+              status: record.translation ? 'ready' : 'pending_ai',
+            });
+            const patch = { status: record.translation ? 'ready' : 'pending_ai' };
+            if (record.translation) patch.translation = record.translation;
+            patchLocalEntry(entry.id, patch);
+            // Mirror manual「加入生词本」sync — do not call optionalServerEnrich
+            // (that path would trigger server sense enrich for translation-only saves).
+            if (hasOptionalApi()) {
+              try {
+                await gmFetch(getApiUrl() + '/entries', {
+                  method: 'POST',
+                  headers: authHeaders(),
+                  body: {
+                    word: entry.word,
+                    sentence: entry.sentence,
+                    source_url: entry.source_url,
+                  },
+                });
+              } catch { /* ignore sync errors on silent auto-save */ }
+            }
+          } catch { /* ignore auto-save errors */ }
+        }
       } catch (e) {
         if (reqId !== selectionGen) return;
         if (localHit) {
