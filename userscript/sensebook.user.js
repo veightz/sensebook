@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609162157
+// @version      0.1.202609162324
 // @description  划词自动查询 / 翻译 / 加入生词本 / 存本并释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -222,6 +222,10 @@
   const ONBOARDING_DONE_KEY = 'sensebook_onboarding_done';
   const FAB_POS_KEY = 'sensebook_fab_pos';
   const AUTO_QUERY_KEY = 'sensebook_auto_query';
+  const AUTO_QUERY_MODE_KEY = 'sensebook_auto_query_mode';
+  const AUTO_SAVE_VOCAB_KEY = 'sensebook_auto_save_vocab';
+  const AUTO_QUERY_MODE_TRANSLATE = 'translate';
+  const AUTO_QUERY_MODE_SENSE = 'sense';
   const QUERY_CACHE_KEY = 'sensebook_query_cache';
   const QUERY_CACHE_CAP = 250;
   const AUTO_QUERY_DEBOUNCE_MS = 350;
@@ -347,6 +351,30 @@
 
   function setAutoQueryEnabled(on) {
     storeSet(AUTO_QUERY_KEY, !!on);
+  }
+
+  /** Auto-query mode: 'translate' | 'sense'. Default 语境释义 (sense). */
+  function getAutoQueryMode() {
+    const v = storeGet(AUTO_QUERY_MODE_KEY, AUTO_QUERY_MODE_SENSE);
+    if (v === AUTO_QUERY_MODE_TRANSLATE || v === '翻译') return AUTO_QUERY_MODE_TRANSLATE;
+    return AUTO_QUERY_MODE_SENSE;
+  }
+
+  function setAutoQueryMode(mode) {
+    storeSet(
+      AUTO_QUERY_MODE_KEY,
+      mode === AUTO_QUERY_MODE_TRANSLATE ? AUTO_QUERY_MODE_TRANSLATE : AUTO_QUERY_MODE_SENSE
+    );
+  }
+
+  /** When sense auto-query runs, optionally write vocab. Default OFF. */
+  function isAutoSaveVocabEnabled() {
+    const v = storeGet(AUTO_SAVE_VOCAB_KEY, false);
+    return v === true || v === 'true' || v === 1 || v === '1';
+  }
+
+  function setAutoSaveVocabEnabled(on) {
+    storeSet(AUTO_SAVE_VOCAB_KEY, !!on);
   }
 
   // ---- Local dict (GM cache; versioned independently of @version) ----
@@ -1565,7 +1593,25 @@
     <input type="checkbox" id="autoQuery" style="width:18px;height:18px;" />
     选中自动查询
   </label>
-  <div class="hint" style="margin-top:4px;">划词后约 0.35 秒自动轻量翻译；结果与缓存可在「查询记录」回看。</div>
+  <div class="hint" style="margin-top:4px;">划词后约 0.35 秒静默查询；结果与缓存可在「查询记录」回看。</div>
+
+  <div id="autoQueryModeWrap" style="margin-top:10px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
+    <div style="font-weight:600;font-size:13px;margin-bottom:8px;">自动查询方式</div>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:500;margin:0 0 6px;">
+      <input type="radio" name="autoQueryMode" id="autoQueryModeSense" value="sense" style="width:16px;height:16px;" />
+      语境释义
+    </label>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:500;margin:0 0 8px;">
+      <input type="radio" name="autoQueryMode" id="autoQueryModeTranslate" value="translate" style="width:16px;height:16px;" />
+      翻译
+    </label>
+    <div class="hint" style="margin:0 0 8px;">默认「语境释义」：显示词义/句意（与「存本并释义」同提示词）。「翻译」走本地词库 + 模型双出。</div>
+    <label id="autoSaveVocabLabel" style="display:flex;align-items:center;gap:8px;font-weight:600;margin:0;">
+      <input type="checkbox" id="autoSaveVocab" style="width:18px;height:18px;" />
+      自动加入生词本
+    </label>
+    <div class="hint" style="margin-top:4px;">仅在「语境释义」路径生效；默认关闭（只展示、不写入生词本）。</div>
+  </div>
 
   <label style="display:flex;align-items:center;gap:8px;font-weight:600;margin-top:14px;">
     <input type="checkbox" id="llmThinking" style="width:18px;height:18px;" />
@@ -1600,6 +1646,25 @@
     keyStatus.textContent = '当前：' + maskApiKey(curKey);
     const autoQueryInput = $('autoQuery');
     if (autoQueryInput) autoQueryInput.checked = isAutoQueryEnabled();
+    const modeSenseInput = $('autoQueryModeSense');
+    const modeTranslateInput = $('autoQueryModeTranslate');
+    const autoSaveVocabInput = $('autoSaveVocab');
+    const autoSaveVocabLabel = $('autoSaveVocabLabel');
+    const curMode = getAutoQueryMode();
+    if (modeSenseInput) modeSenseInput.checked = curMode === AUTO_QUERY_MODE_SENSE;
+    if (modeTranslateInput) modeTranslateInput.checked = curMode === AUTO_QUERY_MODE_TRANSLATE;
+    if (autoSaveVocabInput) autoSaveVocabInput.checked = isAutoSaveVocabEnabled();
+    function syncAutoSaveVocabEnabled() {
+      const senseOn = !!(modeSenseInput && modeSenseInput.checked);
+      if (autoSaveVocabInput) autoSaveVocabInput.disabled = !senseOn;
+      if (autoSaveVocabLabel) {
+        autoSaveVocabLabel.style.opacity = senseOn ? '1' : '0.45';
+        autoSaveVocabLabel.style.pointerEvents = senseOn ? 'auto' : 'none';
+      }
+    }
+    if (modeSenseInput) modeSenseInput.addEventListener('change', syncAutoSaveVocabEnabled);
+    if (modeTranslateInput) modeTranslateInput.addEventListener('change', syncAutoSaveVocabEnabled);
+    syncAutoSaveVocabEnabled();
     const thinkingInput = $('llmThinking');
     if (thinkingInput) thinkingInput.checked = isLlmThinkingEnabled();
     const card = shadow.querySelector('.card');
@@ -1638,6 +1703,9 @@
       storeSet(LLM_MODEL_KEY, model || DEFAULT_LLM_MODEL);
       storeSet(ONBOARDING_DONE_KEY, true);
       if (autoQueryInput) setAutoQueryEnabled(!!autoQueryInput.checked);
+      if (modeTranslateInput && modeTranslateInput.checked) setAutoQueryMode(AUTO_QUERY_MODE_TRANSLATE);
+      else setAutoQueryMode(AUTO_QUERY_MODE_SENSE);
+      if (autoSaveVocabInput) setAutoSaveVocabEnabled(!!autoSaveVocabInput.checked);
       if (thinkingInput) storeSet(LLM_THINKING_KEY, !!thinkingInput.checked);
       updateFabState();
       // Reflect defaults in fields if user cleared
@@ -2406,6 +2474,57 @@
     }
   }
 
+  /**
+   * Contextual 词义/句意 lookup (same enrich prompt as 存本并释义).
+   * Does not write vocab. Caller handles display / optional save.
+   */
+  async function runSenseLookup({ word, sentence, source_url, forceRefresh }) {
+    if (!word && !sentence) throw new Error('没有可释义文本');
+    const cacheKey = makeCacheKey(word, sentence);
+    if (!forceRefresh) {
+      const hit = getCachedByKey(cacheKey);
+      if (hit && (hit.ai_word_sense || hit.ai_sentence_gloss)) {
+        return { record: hit, fromCache: true };
+      }
+    }
+    const senseInFlightKey = 'sense::' + cacheKey;
+    if (!forceRefresh && inFlightByCacheKey.has(senseInFlightKey)) {
+      const record = await inFlightByCacheKey.get(senseInFlightKey);
+      return { record, fromCache: false, piggyback: true };
+    }
+
+    const work = (async () => {
+      let result;
+      if (hasLlmConfig()) {
+        result = await callLlmEnrich({
+          word,
+          sentence: sentence || word,
+          source_url: source_url || location.href,
+        });
+        result = { ...result, stub: false };
+      } else {
+        result = { ...clientStubEnrich(word, sentence || word), stub: true };
+      }
+      return upsertQueryCache({
+        word,
+        sentence: sentence || word,
+        source_url: source_url || location.href,
+        ai_word_sense: result.ai_word_sense,
+        ai_sentence_gloss: result.ai_sentence_gloss,
+        cacheKey,
+        stub: result.stub,
+      });
+    })();
+
+    inFlightByCacheKey.set(senseInFlightKey, work);
+    try {
+      const record = await work;
+      return { record, fromCache: false, stub: !!record.stub };
+    } finally {
+      inFlightByCacheKey.delete(senseInFlightKey);
+    }
+  }
+
   async function doTranslate(opts) {
     // Translate-only path: never call doSave / createLocalEntry.
     if (translateInFlight) return;
@@ -2493,6 +2612,83 @@
     const sentence = lastSel.sentence || lastSel.text;
     if (!word) return;
 
+    const mode = getAutoQueryMode();
+
+    // ---- 语境释义 path (default): enrich display; vocab write only if auto-save on ----
+    if (mode === AUTO_QUERY_MODE_SENSE) {
+      const cacheKey = makeCacheKey(word, sentence);
+      const cacheHit = getCachedByKey(cacheKey);
+
+      autoQueryTimer = setTimeout(async () => {
+        autoQueryTimer = null;
+        if (reqId !== selectionGen) return;
+
+        if (cacheHit && (cacheHit.ai_word_sense || cacheHit.ai_sentence_gloss)) {
+          setSenseGlossResult({
+            ai_word_sense: cacheHit.ai_word_sense,
+            ai_sentence_gloss: cacheHit.ai_sentence_gloss,
+          }, 'ok');
+          if (lastSel.rect) repositionPopup(lastSel.rect);
+          return;
+        }
+
+        setSenseGlossResult({
+          ai_word_sense: '',
+          ai_sentence_gloss: hasLlmConfig() ? '语境释义中…' : '生成 stub 释义…',
+        }, 'loading');
+
+        try {
+          const { record, fromCache } = await runSenseLookup({
+            word,
+            sentence,
+            source_url: location.href,
+            forceRefresh: false,
+          });
+          if (reqId !== selectionGen) return;
+          setSenseGlossResult({
+            ai_word_sense: record.ai_word_sense,
+            ai_sentence_gloss: record.ai_sentence_gloss,
+          }, 'ok');
+          if (lastSel.rect) repositionPopup(lastSel.rect);
+
+          // Optional vocab write (default off). Skip cache hits to avoid flooding 生词本.
+          if (isAutoSaveVocabEnabled() && !fromCache) {
+            try {
+              const entry = createLocalEntry({
+                word,
+                sentence,
+                source_url: location.href,
+                status: 'pending_ai',
+              });
+              patchLocalEntry(entry.id, {
+                ai_sentence_gloss: record.ai_sentence_gloss,
+                ai_word_sense: record.ai_word_sense,
+                status: 'ready',
+              });
+              if (hasOptionalApi()) {
+                try {
+                  await optionalServerEnrich({
+                    ...entry,
+                    ai_sentence_gloss: record.ai_sentence_gloss,
+                    ai_word_sense: record.ai_word_sense,
+                    status: 'ready',
+                  });
+                } catch { /* ignore sync errors on silent auto-save */ }
+              }
+            } catch { /* ignore auto-save errors */ }
+          }
+        } catch (e) {
+          if (reqId !== selectionGen) return;
+          setSenseGlossResult({
+            ai_word_sense: '自动释义失败：' + (e.message || String(e)),
+            ai_sentence_gloss: '',
+          }, 'error');
+        }
+      }, AUTO_QUERY_DEBOUNCE_MS);
+      return;
+    }
+
+    // ---- 翻译 path: dual-out local dict + model translation (no vocab write) ----
     const short = isShortWordToken(word);
 
     // Kick local dict immediately for short tokens (dual-out path).
