@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609161554
+// @version      0.1.202609161556
 // @description  划词自动查询 / 翻译 / 加入生词本 / AI 释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -62,8 +62,6 @@
     }
     return undefined;
   }
-
-  let sensebookErrorAlerted = false;
 
   /** Prefer own enumerable keys without throwing on null/undefined. */
   function safeKeys(obj) {
@@ -144,8 +142,6 @@
 
   function sensebookAlertError(err, where) {
     try {
-      if (sensebookErrorAlerted) return;
-      sensebookErrorAlerted = true;
       const msg = (err && err.message) ? err.message : String(err);
       let loc = where ? String(where) : '';
       if (!loc) {
@@ -167,7 +163,7 @@
         } catch { /* ignore */ }
       }
       const detail = loc ? (msg + ' @' + loc) : msg;
-      alert('Sensebook 脚本错误: ' + detail);
+      // Console-only: do not alert() — blocking modals disrupt page interaction.
       try { console.error('[Sensebook]', detail, err); } catch { /* ignore */ }
     } catch { /* ignore */ }
   }
@@ -202,9 +198,9 @@
       btn.addEventListener('click', () => {
         try {
           if (typeof showLlmSettingsPanel === 'function') showLlmSettingsPanel();
-          else alert('Sensebook：请在油猴菜单打开 LLM 设置');
+          else console.warn('[Sensebook] 请在油猴菜单打开 LLM 设置');
         } catch (e) {
-          alert('Sensebook：' + ((e && e.message) || e));
+          console.error('[Sensebook]', (e && e.message) || e, e);
         }
       });
       root.appendChild(btn);
