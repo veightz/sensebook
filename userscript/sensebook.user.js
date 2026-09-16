@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609162100
+// @version      0.1.202609162151
 // @description  划词自动查询 / 翻译 / 加入生词本 / 存本并释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -721,6 +721,7 @@
   let llmPanelHost = null;
   let lastSel = { text: '', sentence: '', rect: null };
   let busy = false; // only for heavy manual 存本并释义 / optional server paths
+  let translateInFlight = false; // ignore duplicate 翻译 clicks while lookup runs
   let selectionGen = 0; // bumps on each new selection; stale responses discard
   let autoQueryTimer = null;
   const inFlightByCacheKey = new Map(); // cacheKey -> Promise (dedupe)
@@ -887,6 +888,7 @@
       clearTimeout(autoQueryTimer);
       autoQueryTimer = null;
     }
+    translateInFlight = false;
     if (popup) {
       popup.remove();
       popup = null;
@@ -1288,11 +1290,13 @@
     popupBtnRow.setAttribute('data-sensebook-toolbar', '1');
     applyStyles(popupBtnRow, {
       display: 'flex',
-      gap: '0',
+      gap: '6px',
       flexWrap: 'nowrap',
       alignItems: 'center',
-      justifyContent: 'space-between',
-      width: '100%',
+      // Fixed gap (not space-between): spreading across a widening popup shifts
+      // hit targets so a rapid re-click on「翻译」can land on「加入生词本」.
+      justifyContent: 'flex-start',
+      width: 'max-content',
       maxWidth: '100%',
       boxSizing: 'border-box',
       order: '1',
@@ -1328,13 +1332,23 @@
       b.addEventListener('pointerenter', () => showIconTip(b, tipText));
       b.addEventListener('pointerleave', hideIconTip);
       b.addEventListener('blur', hideIconTip);
-      b.addEventListener('mousedown', (e) => e.preventDefault());
+      // Keep selection; also stop bubbling so document dismiss handlers cannot race.
+      b.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      b.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+      });
       b.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
         hideIconTip();
         // Auto-query must not block buttons; only heavy enrich uses busy.
         if (busy && actionId === 'ai') return;
+        // Translate must never save vocab; ignore duplicate clicks while in flight
+        // so rapid re-clicks cannot race UI layout into a mis-hit on 加入生词本.
+        if (actionId === 'translate' && translateInFlight) return;
         onClick();
       });
       return b;
@@ -2388,72 +2402,79 @@
   }
 
   async function doTranslate(opts) {
-    const forceRefresh = !!(opts && opts.forceRefresh);
-    const word = lastSel.text;
-    const sentence = lastSel.sentence || lastSel.text;
-    const reqId = selectionGen;
-    const text = word || sentence;
-    if (!text) {
-      resetPopupResultSlots();
-      setPopupResult('没有可翻译文本', 'error');
-      return;
-    }
-
-    const short = isShortWordToken(word);
-    let localHit = null;
-    if (short) {
-      await ensureLocalDict();
-      if (reqId !== selectionGen) return;
-      localHit = lookupLocalDictSync(word);
-      if (localHit) setLocalDictRow(localHit.gloss);
-      else setLocalDictRow(null);
-    } else {
-      setLocalDictRow(null);
-    }
-
-    if (!hasLlmConfig() && !hasOptionalApi()) {
-      if (localHit) {
-        // Local-only OK; light hint for model
-        setModelRow('已显示本地词库；配置 DeepSeek 后可并行补全', 'hint');
-      } else {
-        const stub = clientStubTranslate(text);
-        setPopupResult(stub, 'hint');
-        toast('请先配置 DeepSeek');
+    // Translate-only path: never call doSave / createLocalEntry.
+    if (translateInFlight) return;
+    translateInFlight = true;
+    try {
+      const forceRefresh = !!(opts && opts.forceRefresh);
+      const word = lastSel.text;
+      const sentence = lastSel.sentence || lastSel.text;
+      const reqId = selectionGen;
+      const text = word || sentence;
+      if (!text) {
+        resetPopupResultSlots();
+        setPopupResult('没有可翻译文本', 'error');
+        return;
       }
-      if (lastSel.rect) repositionPopup(lastSel.rect);
-      return;
-    }
 
-    if (!forceRefresh) {
-      const hit = getCachedByKey(makeCacheKey(word, sentence));
-      if (hit && hit.translation) {
-        setModelRow(formatTranslateResult(hit) || hit.translation || '', 'cache');
+      const short = isShortWordToken(word);
+      let localHit = null;
+      if (short) {
+        await ensureLocalDict();
+        if (reqId !== selectionGen) return;
+        localHit = lookupLocalDictSync(word);
+        if (localHit) setLocalDictRow(localHit.gloss);
+        else setLocalDictRow(null);
+      } else {
+        setLocalDictRow(null);
+      }
+
+      if (!hasLlmConfig() && !hasOptionalApi()) {
+        if (localHit) {
+          // Local-only OK; light hint for model
+          setModelRow('已显示本地词库；配置 DeepSeek 后可并行补全', 'hint');
+        } else {
+          const stub = clientStubTranslate(text);
+          setPopupResult(stub, 'hint');
+          toast('请先配置 DeepSeek');
+        }
+        if (lastSel.rect) repositionPopup(lastSel.rect);
+        return;
+      }
+
+      if (!forceRefresh) {
+        const hit = getCachedByKey(makeCacheKey(word, sentence));
+        if (hit && hit.translation) {
+          setModelRow(formatTranslateResult(hit) || hit.translation || '', 'cache');
+        } else {
+          setModelRow('查询中…', 'loading');
+        }
       } else {
         setModelRow('查询中…', 'loading');
       }
-    } else {
-      setModelRow('查询中…', 'loading');
-    }
 
-    try {
-      const { record, fromCache } = await runTranslateLookup({
-        word,
-        sentence,
-        source_url: location.href,
-        forceRefresh,
-      });
-      if (reqId !== selectionGen) return; // stale
-      const body = formatTranslateResult(record) || '(空)';
-      setModelRow(body, fromCache ? 'cache' : 'ok');
-      if (lastSel.rect) repositionPopup(lastSel.rect);
-    } catch (e) {
-      if (reqId !== selectionGen) return;
-      if (localHit) {
-        setModelRow('模型失败：' + (e.message || String(e)), 'error');
-      } else {
-        setModelRow('翻译失败：' + (e.message || String(e)), 'error');
+      try {
+        const { record, fromCache } = await runTranslateLookup({
+          word,
+          sentence,
+          source_url: location.href,
+          forceRefresh,
+        });
+        if (reqId !== selectionGen) return; // stale
+        const body = formatTranslateResult(record) || '(空)';
+        setModelRow(body, fromCache ? 'cache' : 'ok');
+        if (lastSel.rect) repositionPopup(lastSel.rect);
+      } catch (e) {
+        if (reqId !== selectionGen) return;
+        if (localHit) {
+          setModelRow('模型失败：' + (e.message || String(e)), 'error');
+        } else {
+          setModelRow('翻译失败：' + (e.message || String(e)), 'error');
+        }
+        if (lastSel.rect) repositionPopup(lastSel.rect);
       }
-      if (lastSel.rect) repositionPopup(lastSel.rect);
+    } finally {
+      translateInFlight = false;
     }
   }
 
