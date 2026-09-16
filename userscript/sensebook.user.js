@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609161959
+// @version      0.1.202609162020
 // @description  划词自动查询 / 翻译 / 加入生词本 / AI 释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -781,7 +781,91 @@
     }
   }
 
+  let iconTipEl = null;
+  let iconTipTimer = null;
+
+  function hideIconTip() {
+    if (iconTipTimer) {
+      clearTimeout(iconTipTimer);
+      iconTipTimer = null;
+    }
+    if (iconTipEl) {
+      try { iconTipEl.remove(); } catch { /* ignore */ }
+      iconTipEl = null;
+    }
+  }
+
+  function positionIconTip(anchor) {
+    if (!iconTipEl || !anchor) return;
+    const tip = iconTipEl;
+    const margin = 8;
+    const gap = 6;
+    const rect = anchor.getBoundingClientRect();
+    tip.style.visibility = 'hidden';
+    tip.style.display = 'block';
+    tip.style.left = '0px';
+    tip.style.top = '0px';
+    const tw = tip.offsetWidth || 0;
+    const th = tip.offsetHeight || 0;
+    const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+    const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+
+    // Prefer above the icon; flip below if needed.
+    let top = rect.top - th - gap;
+    if (top < margin) top = rect.bottom + gap;
+    if (top + th > vh - margin) top = Math.max(margin, vh - th - margin);
+    if (top < margin) top = margin;
+
+    let left = rect.left + (rect.width - tw) / 2;
+    if (left < margin) left = margin;
+    if (left + tw > vw - margin) left = Math.max(margin, vw - tw - margin);
+
+    tip.style.left = left + 'px';
+    tip.style.top = top + 'px';
+    tip.style.visibility = 'visible';
+  }
+
+  /** Near-instant custom Chinese hover tip (do not rely on native title). */
+  function showIconTip(anchor, label) {
+    hideIconTip();
+    if (!anchor || !label) return;
+    iconTipTimer = setTimeout(() => {
+      iconTipTimer = null;
+      try {
+        if (!anchor.isConnected) return;
+      } catch {
+        return;
+      }
+      const tip = document.createElement('div');
+      tip.id = 'sensebook-icon-tip';
+      tip.setAttribute('role', 'tooltip');
+      tip.textContent = String(label);
+      applyStyles(tip, {
+        position: 'fixed',
+        zIndex: '2147483647',
+        padding: '4px 8px',
+        borderRadius: '6px',
+        background: 'rgba(15,23,42,.92)',
+        color: '#fff',
+        fontSize: '12px',
+        lineHeight: '1.35',
+        fontFamily: 'system-ui,sans-serif',
+        fontWeight: '500',
+        whiteSpace: 'nowrap',
+        pointerEvents: 'none',
+        boxShadow: '0 2px 8px rgba(0,0,0,.22)',
+        maxWidth: 'calc(100vw - 16px)',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+      });
+      iconTipEl = tip;
+      document.documentElement.appendChild(tip);
+      positionIconTip(anchor);
+    }, 40);
+  }
+
   function hidePopup() {
+    hideIconTip();
     if (autoQueryTimer) {
       clearTimeout(autoQueryTimer);
       autoQueryTimer = null;
@@ -1100,8 +1184,8 @@
     const mkIconBtn = (label, iconKey, onClick, bg, actionId) => {
       const b = document.createElement('button');
       b.type = 'button';
-      // Native tooltip on hover + accessible name (薇尔莉特验收: title)
-      b.title = label;
+      // Instant custom Chinese hover tip + aria-label (do not rely on native title)
+      b.removeAttribute('title');
       b.setAttribute('aria-label', label);
       if (actionId) b.setAttribute('data-action', actionId);
       b.appendChild(_svgIcon(POPUP_ICON[iconKey] || []));
@@ -1123,10 +1207,14 @@
         justifyContent: 'center',
         lineHeight: '0',
       });
+      b.addEventListener('pointerenter', () => showIconTip(b, label));
+      b.addEventListener('pointerleave', hideIconTip);
+      b.addEventListener('blur', hideIconTip);
       b.addEventListener('mousedown', (e) => e.preventDefault());
       b.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
+        hideIconTip();
         // Auto-query must not block buttons; only heavy enrich uses busy.
         if (busy && actionId === 'ai') return;
         onClick();
