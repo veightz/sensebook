@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609161459
+// @version      0.1.202609161531
 // @description  划词自动查询 / 翻译 / 加入生词本 / AI 释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -124,6 +124,7 @@
   const LLM_API_KEY_KEY = 'sensebook_llm_api_key';
   const LLM_MODEL_KEY = 'sensebook_llm_model';
   const ONBOARDING_DONE_KEY = 'sensebook_onboarding_done';
+  const FAB_POS_KEY = 'sensebook_fab_pos';
   const AUTO_QUERY_KEY = 'sensebook_auto_query';
   const QUERY_CACHE_KEY = 'sensebook_query_cache';
   const QUERY_CACHE_CAP = 250;
@@ -588,6 +589,8 @@
   let fabRoot = null;
   let fabSheet = null;
   let fabButton = null;
+  let fabDragging = false;
+  let fabDragSuppressUntil = 0;
   let onboardingScheduled = false;
 
   function eventInsideLlmSettings(e) {
@@ -2206,18 +2209,149 @@
     selectionGen += 1;
   }, true);
 
-  function hideFabSheet() {
-    if (fabSheet) {
-      fabSheet.style.display = 'none';
-      if (fabRoot) fabRoot.querySelector('[data-sensebook-fab]')?.setAttribute('aria-expanded', 'false');
+  function canHoverExpandFab() {
+    try {
+      return window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+    } catch {
+      return true;
     }
   }
 
+  function isFabSheetOpen() {
+    return !!(fabSheet && fabSheet.style.display !== 'none');
+  }
+
+  function hideFabSheet() {
+    if (fabSheet) {
+      fabSheet.style.display = 'none';
+      if (fabButton) fabButton.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  function openFabSheet() {
+    if (!fabSheet || !fabButton) return;
+    if (fabDragging || Date.now() < fabDragSuppressUntil) return;
+    fabSheet.style.display = 'flex';
+    fabButton.setAttribute('aria-expanded', 'true');
+  }
+
+  function toggleFabSheet() {
+    if (isFabSheetOpen()) hideFabSheet();
+    else openFabSheet();
+  }
+
+  /** @deprecated toggle helper kept for call sites that expected open/close flip */
   function showFabSheet() {
-    if (!fabSheet) return;
-    const opening = fabSheet.style.display === 'none';
-    fabSheet.style.display = opening ? 'flex' : 'none';
-    if (fabRoot) fabRoot.querySelector('[data-sensebook-fab]')?.setAttribute('aria-expanded', String(opening));
+    toggleFabSheet();
+  }
+
+  function clampFabPosition(left, top) {
+    const margin = 8;
+    let w = 96;
+    let h = 40;
+    if (fabRoot) {
+      const rect = fabRoot.getBoundingClientRect();
+      if (rect.width > 0) w = rect.width;
+      if (rect.height > 0) h = rect.height;
+    }
+    const maxL = Math.max(margin, window.innerWidth - w - margin);
+    const maxT = Math.max(margin, window.innerHeight - h - margin);
+    return {
+      left: Math.min(Math.max(margin, left), maxL),
+      top: Math.min(Math.max(margin, top), maxT),
+    };
+  }
+
+  function applyFabPosition(left, top) {
+    if (!fabRoot) return;
+    const pos = clampFabPosition(left, top);
+    fabRoot.style.left = pos.left + 'px';
+    fabRoot.style.top = pos.top + 'px';
+    fabRoot.style.right = 'auto';
+    fabRoot.style.bottom = 'auto';
+    return pos;
+  }
+
+  function defaultFabPosition() {
+    let w = 96;
+    let h = 40;
+    if (fabRoot) {
+      w = fabRoot.offsetWidth || w;
+      h = fabRoot.offsetHeight || h;
+    }
+    return {
+      left: Math.max(8, window.innerWidth - w - 16),
+      top: Math.max(8, window.innerHeight - h - 16),
+    };
+  }
+
+  function loadAndApplyFabPosition() {
+    if (!fabRoot) return;
+    let saved = null;
+    try {
+      saved = storeGet(FAB_POS_KEY, null);
+    } catch { /* ignore */ }
+    if (saved && typeof saved === 'object' && Number.isFinite(saved.left) && Number.isFinite(saved.top)) {
+      applyFabPosition(saved.left, saved.top);
+    } else {
+      const d = defaultFabPosition();
+      applyFabPosition(d.left, d.top);
+    }
+  }
+
+  function persistFabPosition() {
+    if (!fabRoot) return;
+    const rect = fabRoot.getBoundingClientRect();
+    const pos = applyFabPosition(rect.left, rect.top);
+    storeSet(FAB_POS_KEY, { left: pos.left, top: pos.top });
+  }
+
+  function setupFabDrag() {
+    if (!fabRoot || !fabButton) return;
+    const THRESH = 6;
+    fabButton.addEventListener('pointerdown', (e) => {
+      if (e.button != null && e.button !== 0) return;
+      const rect = fabRoot.getBoundingClientRect();
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const origLeft = rect.left;
+      const origTop = rect.top;
+      let moved = false;
+      try { fabButton.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+
+      const onMove = (ev) => {
+        const dx = ev.clientX - startX;
+        const dy = ev.clientY - startY;
+        if (!moved && (Math.abs(dx) > THRESH || Math.abs(dy) > THRESH)) {
+          moved = true;
+          fabDragging = true;
+          hideFabSheet();
+          fabButton.style.cursor = 'grabbing';
+        }
+        if (moved) {
+          applyFabPosition(origLeft + dx, origTop + dy);
+        }
+      };
+
+      const onUp = (ev) => {
+        try { fabButton.releasePointerCapture(ev.pointerId); } catch { /* ignore */ }
+        fabButton.removeEventListener('pointermove', onMove);
+        fabButton.removeEventListener('pointerup', onUp);
+        fabButton.removeEventListener('pointercancel', onUp);
+        fabButton.style.cursor = 'grab';
+        if (moved) {
+          persistFabPosition();
+          fabDragSuppressUntil = Date.now() + 350;
+          fabDragging = false;
+          hideFabSheet();
+          try { ev.preventDefault(); } catch { /* ignore */ }
+        }
+      };
+
+      fabButton.addEventListener('pointermove', onMove);
+      fabButton.addEventListener('pointerup', onUp);
+      fabButton.addEventListener('pointercancel', onUp);
+    });
   }
 
   function setupFab() {
@@ -2227,13 +2361,11 @@
     fabRoot.id = 'sensebook-fab-root';
     Object.assign(fabRoot.style, {
       position: 'fixed',
-      right: '16px',
-      bottom: '16px',
       zIndex: '2147483647',
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'flex-end',
-      gap: '8px',
+      gap: '6px',
       fontFamily: 'system-ui,sans-serif',
       pointerEvents: 'auto',
     });
@@ -2244,7 +2376,7 @@
       display: 'none',
       flexDirection: 'column',
       gap: '6px',
-      width: '180px',
+      width: '168px',
       padding: '8px',
       background: '#fff',
       border: '1px solid #e2e8f0',
@@ -2257,7 +2389,7 @@
       button.type = 'button';
       button.textContent = label;
       Object.assign(button.style, {
-        minHeight: '44px',
+        minHeight: '40px',
         width: '100%',
         padding: '8px 10px',
         border: 'none',
@@ -2305,28 +2437,48 @@
     fabButton.setAttribute('data-sensebook-fab', 'true');
     fabButton.setAttribute('aria-expanded', 'false');
     Object.assign(fabButton.style, {
-      minWidth: '128px',
-      minHeight: '52px',
-      padding: '12px 18px',
+      minWidth: '72px',
+      minHeight: '36px',
+      padding: '6px 12px',
       border: '2px solid #fff',
       borderRadius: '999px',
       background: '#7c3aed',
       color: '#fff',
-      boxShadow: '0 6px 22px rgba(124,58,237,.55), 0 2px 8px rgba(0,0,0,.25)',
-      fontSize: '15px',
-      fontWeight: '800',
+      boxShadow: '0 4px 14px rgba(124,58,237,.45), 0 1px 4px rgba(0,0,0,.2)',
+      fontSize: '12px',
+      fontWeight: '700',
       letterSpacing: '0.02em',
-      cursor: 'pointer',
-      touchAction: 'manipulation',
+      cursor: 'grab',
+      touchAction: 'none',
+      userSelect: 'none',
+      lineHeight: '1.2',
     });
+
+    // Hover-to-expand on devices that support hover; touch uses tap-to-toggle below.
+    fabRoot.addEventListener('pointerenter', (e) => {
+      if (!canHoverExpandFab()) return;
+      if (e.pointerType === 'touch') return;
+      if (fabDragging || Date.now() < fabDragSuppressUntil) return;
+      if (!hasLlmConfig()) return;
+      openFabSheet();
+    });
+    fabRoot.addEventListener('pointerleave', () => {
+      if (!canHoverExpandFab()) return;
+      if (fabDragging) return;
+      hideFabSheet();
+    });
+
     fabButton.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      if (hasLlmConfig()) {
-        showFabSheet();
-      } else {
+      if (fabDragging || Date.now() < fabDragSuppressUntil) return;
+      if (!hasLlmConfig()) {
         showLlmSettingsPanel();
+        return;
       }
+      // Touch / no-hover: light tap toggles menu. On hover devices, click also toggles
+      // (hover already opens; click can pin/close — keeps behavior usable either way).
+      toggleFabSheet();
     });
     updateFabState();
 
@@ -2334,6 +2486,22 @@
     fabRoot.appendChild(fabButton);
     const mount = document.body || document.documentElement;
     if (mount) mount.appendChild(fabRoot);
+
+    loadAndApplyFabPosition();
+    setupFabDrag();
+
+    // Re-clamp after layout / viewport changes; keep persisted coords valid.
+    try {
+      if (!window.__sensebookFabResizeBound) {
+        window.__sensebookFabResizeBound = true;
+        window.addEventListener('resize', () => {
+          try {
+            if (!fabRoot || !document.getElementById('sensebook-fab-root')) return;
+            persistFabPosition();
+          } catch { /* ignore */ }
+        });
+      }
+    } catch { /* ignore */ }
   }
 
   function updateFabState() {
