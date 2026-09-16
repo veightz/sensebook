@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609161531
+// @version      0.1.202609161539
 // @description  划词自动查询 / 翻译 / 加入生词本 / AI 释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -2209,12 +2209,127 @@
     selectionGen += 1;
   }, true);
 
+
+  function getSelectionTextForCopy() {
+    try {
+      const live = String(window.getSelection && window.getSelection().toString() || '').trim();
+      if (live) return live;
+    } catch { /* ignore */ }
+    try {
+      const cached = String((lastSel && lastSel.text) || '').trim();
+      if (cached) return cached;
+    } catch { /* ignore */ }
+    return '';
+  }
+
+  function copyLastSelectionText() {
+    const text = getSelectionTextForCopy();
+    if (!text) {
+      toast('暂无划选文本可复制');
+      return;
+    }
+    const done = () => toast('已复制划选文本');
+    const fail = () => toast('复制失败');
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        navigator.clipboard.writeText(text).then(done).catch(() => {
+          if (copyTextViaExecCommand(text)) done();
+          else fail();
+        });
+        return;
+      }
+    } catch { /* fall through */ }
+    if (copyTextViaExecCommand(text)) done();
+    else fail();
+  }
+
+  function copyTextViaExecCommand(text) {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      Object.assign(ta.style, {
+        position: 'fixed',
+        left: '-9999px',
+        top: '0',
+        opacity: '0',
+      });
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, ta.value.length);
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return !!ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Hover-expand only when OS is clearly desktop Win/macOS/Linux.
+   * Uncertain / Android / iOS => false (tap/click only). Default false.
+   */
+  function isClearlyDesktopOs() {
+    try {
+      const uaData = navigator.userAgentData;
+      if (uaData) {
+        if (uaData.mobile === true) return false;
+        const p = String(uaData.platform || '').toLowerCase().replace(/\s+/g, '');
+        if (!p) {
+          /* fall through to UA / platform */
+        } else if (/android|ios|iphone|ipad|ipod/.test(p)) {
+          return false;
+        } else if (p === 'windows' || p === 'macos' || p === 'linux') {
+          return true;
+        } else {
+          // Known non-desktop or unknown platform string => do not hover-expand
+          return false;
+        }
+      }
+    } catch { /* ignore */ }
+
+    try {
+      const ua = String(navigator.userAgent || '');
+      const plat = String(navigator.platform || '');
+      // Mobile / tablet first — never hover-expand
+      if (/Android|iPhone|iPod|iPad|webOS|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(ua)) return false;
+      if (/iPad|Tablet/i.test(ua)) return false;
+      // iPadOS 13+ may report MacIntel with touch
+      if (plat === 'MacIntel' && typeof navigator.maxTouchPoints === 'number' && navigator.maxTouchPoints > 1) {
+        return false;
+      }
+      if (/Win(dows|32|64)/i.test(plat) || /Windows NT/i.test(ua)) return true;
+      if (/Mac(intosh|Intel|PPC)/i.test(plat) || /\bMac OS X\b/i.test(ua)) return true;
+      if (/Linux/i.test(plat) || (/\bX11\b/i.test(ua) && /Linux/i.test(ua))) {
+        if (/Android/i.test(ua)) return false;
+        return true;
+      }
+    } catch { /* ignore */ }
+    return false; // uncertain => no hover expand
+  }
+
   function canHoverExpandFab() {
+    if (!isClearlyDesktopOs()) return false;
     try {
       return window.matchMedia('(hover: hover) and (pointer: fine)').matches;
     } catch {
-      return true;
+      return false; // uncertain => no hover expand
     }
+  }
+
+  function getFabSize() {
+    let w = 96;
+    let h = 40;
+    // Measure the FAB button only — never the expanded sheet (sheet is out-of-flow)
+    if (fabButton) {
+      const rect = fabButton.getBoundingClientRect();
+      if (rect.width > 0) w = rect.width;
+      if (rect.height > 0) h = rect.height;
+    } else if (fabRoot) {
+      w = fabRoot.offsetWidth || w;
+      h = fabRoot.offsetHeight || h;
+    }
+    return { w, h };
   }
 
   function isFabSheetOpen() {
@@ -2228,10 +2343,44 @@
     }
   }
 
+  /** Place compact sheet upward/inward so it never covers the FAB drag target. */
+  function positionFabSheet() {
+    if (!fabSheet || !fabRoot || !fabButton) return;
+    const btn = fabButton.getBoundingClientRect();
+    const sheetW = fabSheet.offsetWidth || 120;
+    const sheetH = fabSheet.offsetHeight || 120;
+    const gap = 6;
+    const margin = 8;
+    // Prefer expand upward (above FAB); if not enough room, expand downward below FAB.
+    const spaceAbove = btn.top - margin;
+    const spaceBelow = window.innerHeight - btn.bottom - margin;
+    const openUp = spaceAbove >= sheetH + gap || spaceAbove >= spaceBelow;
+    fabSheet.style.left = 'auto';
+    fabSheet.style.right = '0';
+    if (openUp) {
+      fabSheet.style.top = 'auto';
+      fabSheet.style.bottom = (btn.height + gap) + 'px';
+    } else {
+      fabSheet.style.bottom = 'auto';
+      fabSheet.style.top = (btn.height + gap) + 'px';
+    }
+    // Keep sheet inward (toward viewport center) when near left edge
+    const spaceRight = window.innerWidth - btn.right - margin;
+    if (btn.left + btn.width < sheetW && spaceRight < sheetW) {
+      // near left: align sheet's left to FAB left via left:0
+      fabSheet.style.right = 'auto';
+      fabSheet.style.left = '0';
+    } else {
+      fabSheet.style.left = 'auto';
+      fabSheet.style.right = '0';
+    }
+  }
+
   function openFabSheet() {
     if (!fabSheet || !fabButton) return;
     if (fabDragging || Date.now() < fabDragSuppressUntil) return;
     fabSheet.style.display = 'flex';
+    positionFabSheet();
     fabButton.setAttribute('aria-expanded', 'true');
   }
 
@@ -2247,13 +2396,7 @@
 
   function clampFabPosition(left, top) {
     const margin = 8;
-    let w = 96;
-    let h = 40;
-    if (fabRoot) {
-      const rect = fabRoot.getBoundingClientRect();
-      if (rect.width > 0) w = rect.width;
-      if (rect.height > 0) h = rect.height;
-    }
+    const { w, h } = getFabSize();
     const maxL = Math.max(margin, window.innerWidth - w - margin);
     const maxT = Math.max(margin, window.innerHeight - h - margin);
     return {
@@ -2269,16 +2412,12 @@
     fabRoot.style.top = pos.top + 'px';
     fabRoot.style.right = 'auto';
     fabRoot.style.bottom = 'auto';
+    if (isFabSheetOpen()) positionFabSheet();
     return pos;
   }
 
   function defaultFabPosition() {
-    let w = 96;
-    let h = 40;
-    if (fabRoot) {
-      w = fabRoot.offsetWidth || w;
-      h = fabRoot.offsetHeight || h;
-    }
+    const { w, h } = getFabSize();
     return {
       left: Math.max(8, window.innerWidth - w - 16),
       top: Math.max(8, window.innerHeight - h - 16),
@@ -2311,6 +2450,8 @@
     const THRESH = 6;
     fabButton.addEventListener('pointerdown', (e) => {
       if (e.button != null && e.button !== 0) return;
+      // Drag handle is the FAB itself only — collapse menu so sheet cannot steal moves
+      hideFabSheet();
       const rect = fabRoot.getBoundingClientRect();
       const startX = e.clientX;
       const startY = e.clientY;
@@ -2345,6 +2486,8 @@
           fabDragging = false;
           hideFabSheet();
           try { ev.preventDefault(); } catch { /* ignore */ }
+        } else {
+          fabDragging = false;
         }
       };
 
@@ -2362,10 +2505,9 @@
     Object.assign(fabRoot.style, {
       position: 'fixed',
       zIndex: '2147483647',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'flex-end',
-      gap: '6px',
+      display: 'block',
+      width: 'auto',
+      height: 'auto',
       fontFamily: 'system-ui,sans-serif',
       pointerEvents: 'auto',
     });
@@ -2374,69 +2516,82 @@
     fabSheet.id = 'sensebook-fab-sheet';
     Object.assign(fabSheet.style, {
       display: 'none',
+      position: 'absolute',
+      zIndex: '1',
       flexDirection: 'column',
-      gap: '6px',
-      width: '168px',
-      padding: '8px',
+      gap: '2px',
+      width: 'max-content',
+      maxWidth: '132px',
+      minWidth: '92px',
+      padding: '3px',
       background: '#fff',
       border: '1px solid #e2e8f0',
-      borderRadius: '12px',
-      boxShadow: '0 6px 24px rgba(15,23,42,.22)',
+      borderRadius: '10px',
+      boxShadow: '0 4px 14px rgba(15,23,42,.18)',
+      pointerEvents: 'auto',
     });
 
-    const makeAction = (label, onClick, background) => {
+    const makeAction = (label, onClick) => {
       const button = document.createElement('button');
       button.type = 'button';
       button.textContent = label;
       Object.assign(button.style, {
-        minHeight: '40px',
+        display: 'block',
+        minHeight: '22px',
         width: '100%',
-        padding: '8px 10px',
-        border: 'none',
-        borderRadius: '8px',
-        background,
-        color: '#fff',
-        fontSize: '13px',
+        padding: '2px 7px',
+        border: '1px solid #cbd5e1',
+        borderRadius: '6px',
+        background: '#f8fafc',
+        color: '#334155',
+        fontSize: '10px',
+        fontWeight: '600',
+        lineHeight: '1.2',
         cursor: 'pointer',
         textAlign: 'left',
+        whiteSpace: 'nowrap',
         touchAction: 'manipulation',
+        boxSizing: 'border-box',
       });
       button.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
+        // Ignore accidental clicks that arrived during/after a drag
+        if (fabDragging || Date.now() < fabDragSuppressUntil) return;
         hideFabSheet();
         setTimeout(onClick, 0);
       });
+      // Never let sheet items start a FAB drag or block pointer capture on FAB
+      button.addEventListener('pointerdown', (event) => {
+        event.stopPropagation();
+      });
       return button;
     };
-    fabSheet.appendChild(makeAction('DeepSeek 设置', showLlmSettingsPanel, '#7c3aed'));
-    fabSheet.appendChild(makeAction('我的生词本', showLocalPanel, '#0f766e'));
-    fabSheet.appendChild(makeAction('查询记录', () => showQueryHistoryPanel(), '#2563eb'));
-    fabSheet.appendChild(makeAction(
+
+    let autoQueryChip = null;
+    fabSheet.appendChild(makeAction('复制文本', copyLastSelectionText));
+    fabSheet.appendChild(makeAction('DeepSeek 设置', showLlmSettingsPanel));
+    fabSheet.appendChild(makeAction('我的生词本', showLocalPanel));
+    fabSheet.appendChild(makeAction('查询记录', () => showQueryHistoryPanel()));
+    autoQueryChip = makeAction(
       isAutoQueryEnabled() ? '自动查询：开' : '自动查询：关',
       () => {
         setAutoQueryEnabled(!isAutoQueryEnabled());
         toast(isAutoQueryEnabled() ? '已开启选中自动查询' : '已关闭选中自动查询');
-        // rebuild sheet labels next open
-        try {
-          if (fabSheet) {
-            fabSheet.remove();
-            fabSheet = null;
-          }
-          if (fabRoot) fabRoot.remove();
-          fabRoot = null;
-          fabButton = null;
-          setupFab();
-        } catch { /* ignore */ }
-      },
-      '#475569'
-    ));
+        if (autoQueryChip) {
+          autoQueryChip.textContent = isAutoQueryEnabled() ? '自动查询：开' : '自动查询：关';
+        }
+      }
+    );
+    fabSheet.appendChild(autoQueryChip);
 
     fabButton = document.createElement('button');
     fabButton.type = 'button';
     fabButton.setAttribute('data-sensebook-fab', 'true');
     fabButton.setAttribute('aria-expanded', 'false');
     Object.assign(fabButton.style, {
+      position: 'relative',
+      zIndex: '2',
       minWidth: '72px',
       minHeight: '36px',
       padding: '6px 12px',
@@ -2454,7 +2609,8 @@
       lineHeight: '1.2',
     });
 
-    // Hover-to-expand on devices that support hover; touch uses tap-to-toggle below.
+    // Hover-to-expand only on clearly-identified desktop OS + fine pointer.
+    // Android/iOS/uncertain: click/tap only (no hover auto-open).
     fabRoot.addEventListener('pointerenter', (e) => {
       if (!canHoverExpandFab()) return;
       if (e.pointerType === 'touch') return;
@@ -2476,14 +2632,14 @@
         showLlmSettingsPanel();
         return;
       }
-      // Touch / no-hover: light tap toggles menu. On hover devices, click also toggles
-      // (hover already opens; click can pin/close — keeps behavior usable either way).
+      // Light tap / click toggles menu (primary on touch & non-desktop OS).
       toggleFabSheet();
     });
     updateFabState();
 
-    fabRoot.appendChild(fabSheet);
+    // FAB first in tree & higher z-index; sheet is absolute so it never pushes/covers the drag handle
     fabRoot.appendChild(fabButton);
+    fabRoot.appendChild(fabSheet);
     const mount = document.body || document.documentElement;
     if (mount) mount.appendChild(fabRoot);
 
@@ -2498,6 +2654,7 @@
           try {
             if (!fabRoot || !document.getElementById('sensebook-fab-root')) return;
             persistFabPosition();
+            if (isFabSheetOpen()) positionFabSheet();
           } catch { /* ignore */ }
         });
       }
