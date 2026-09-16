@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609161941
+// @version      0.1.202609161956
 // @description  划词自动查询 / 翻译 / 加入生词本 / AI 释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -805,6 +805,7 @@
       minWidth: '0',
       maxWidth: 'none',
       alignSelf: 'stretch',
+      order: '0',
       marginTop: '0',
       padding: '8px 10px',
       borderRadius: '8px',
@@ -825,7 +826,13 @@
     modelRow.style.display = 'none';
     el.appendChild(localRow);
     el.appendChild(modelRow);
-    popup.appendChild(el);
+    // Keep result nearer selection than the toolbar: result first in DOM;
+    // flex-direction flips to column-reverse when popup is above selection.
+    if (popupBtnRow && popup.contains(popupBtnRow)) {
+      popup.insertBefore(el, popupBtnRow);
+    } else {
+      popup.appendChild(el);
+    }
     popupResultEl = el;
     return el;
   }
@@ -951,18 +958,106 @@
     setModelRow(msg || '查询中…', 'loading');
   }
 
+  function _svgIcon(parts, viewBox) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', viewBox || '0 0 24 24');
+    svg.setAttribute('width', '16');
+    svg.setAttribute('height', '16');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    const list = Array.isArray(parts) ? parts : [parts];
+    for (const part of list) {
+      if (!part) continue;
+      if (typeof part === 'string') {
+        const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        p.setAttribute('d', part);
+        svg.appendChild(p);
+        continue;
+      }
+      const tag = part.tag || 'path';
+      const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+      const attrs = part.attrs || {};
+      for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
+      if (part.d && !attrs.d) el.setAttribute('d', part.d);
+      svg.appendChild(el);
+    }
+    return svg;
+  }
 
+  const POPUP_ICON = {
+    translate: [
+      { tag: 'path', attrs: { d: 'M5 8l6 6' } },
+      { tag: 'path', attrs: { d: 'M4 14l6-6 2-3' } },
+      { tag: 'path', attrs: { d: 'M2 5h12' } },
+      { tag: 'path', attrs: { d: 'M7 2h1' } },
+      { tag: 'path', attrs: { d: 'M22 22l-5-10-5 10' } },
+      { tag: 'path', attrs: { d: 'M14 18h6' } },
+    ],
+    copy: [
+      { tag: 'rect', attrs: { x: '9', y: '9', width: '13', height: '13', rx: '2' } },
+      { tag: 'path', attrs: { d: 'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' } },
+    ],
+    addVocab: [
+      { tag: 'path', attrs: { d: 'M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z' } },
+      { tag: 'line', attrs: { x1: '12', y1: '8', x2: '12', y2: '14' } },
+      { tag: 'line', attrs: { x1: '9', y1: '11', x2: '15', y2: '11' } },
+    ],
+    ai: [
+      { tag: 'path', attrs: { d: 'M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3z' } },
+      { tag: 'path', attrs: { d: 'M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14z' } },
+    ],
+    vocab: [
+      { tag: 'path', attrs: { d: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20' } },
+      { tag: 'path', attrs: { d: 'M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z' } },
+    ],
+  };
+
+  function _clampPopupResultMaxHeight(vh, margin) {
+    if (!popup || !popupResultEl) return;
+    const btnH = popupBtnRow ? popupBtnRow.offsetHeight : 0;
+    const pad = 16; // popup padding + gaps
+    const available = Math.max(72, vh - 2 * margin - btnH - pad);
+    const cap = Math.min(220, available);
+    popupResultEl.style.maxHeight = cap + 'px';
+  }
+
+  /**
+   * Place popup relative to selection: prefer below; flip above when needed;
+   * clamp fully into the viewport. Results stay nearer selection than toolbar
+   * via flex-direction (column below, column-reverse above).
+   */
   function repositionPopup(rect) {
     if (!popup || !rect) return;
-    const pw = popup.offsetWidth;
-    const ph = popup.offsetHeight;
-    let top = rect.bottom + 8;
+    const margin = 8;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    _clampPopupResultMaxHeight(vh, margin);
+
+    const pw = popup.offsetWidth || 0;
+    const ph = popup.offsetHeight || 0;
+    const spaceBelow = vh - rect.bottom - margin;
+    const spaceAbove = rect.top - margin;
+    // Prefer below; flip above when content does not fit below and above has more room.
+    const placeAbove = ph > spaceBelow && spaceAbove > spaceBelow;
+
+    let top = placeAbove ? (rect.top - ph - margin) : (rect.bottom + margin);
     let left = rect.left + rect.width / 2 - pw / 2;
-    if (top + ph > window.innerHeight - 8) top = rect.top - ph - 8;
-    if (left < 8) left = 8;
-    if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
-    popup.style.top = Math.max(8, top) + 'px';
+
+    if (left < margin) left = margin;
+    if (left + pw > vw - margin) left = Math.max(margin, vw - pw - margin);
+
+    if (top + ph > vh - margin) top = vh - ph - margin;
+    if (top < margin) top = margin;
+
+    popup.style.top = top + 'px';
     popup.style.left = left + 'px';
+    popup.style.flexDirection = placeAbove ? 'column-reverse' : 'column';
+    try { popup.dataset.place = placeAbove ? 'above' : 'below'; } catch { /* ignore */ }
   }
 
   function showPopup(rect) {
@@ -978,6 +1073,7 @@
       gap: '4px',
       padding: '6px',
       width: 'max-content',
+      minWidth: '200px',
       maxWidth: 'calc(100vw - 16px)',
       boxSizing: 'border-box',
       background: '#fff',
@@ -988,58 +1084,71 @@
     });
 
     popupBtnRow = document.createElement('div');
+    popupBtnRow.setAttribute('data-sensebook-toolbar', '1');
     applyStyles(popupBtnRow, {
       display: 'flex',
-      gap: '6px',
+      gap: '4px',
       flexWrap: 'wrap',
-      width: 'max-content',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      width: '100%',
       maxWidth: '100%',
       boxSizing: 'border-box',
+      order: '1',
     });
 
-    const mkBtn = (label, onClick, bg) => {
+    const mkIconBtn = (label, iconKey, onClick, bg, actionId) => {
       const b = document.createElement('button');
       b.type = 'button';
-      b.textContent = label;
+      // Native tooltip on hover + accessible name (薇尔莉特验收: title)
+      b.title = label;
+      b.setAttribute('aria-label', label);
+      if (actionId) b.setAttribute('data-action', actionId);
+      b.appendChild(_svgIcon(POPUP_ICON[iconKey] || []));
       applyStyles(b, {
-        minHeight: '44px',
-        minWidth: '64px',
-        padding: '8px 12px',
+        width: '30px',
+        height: '30px',
+        minWidth: '30px',
+        minHeight: '30px',
+        padding: '0',
         border: 'none',
         borderRadius: '8px',
         background: bg || '#2563eb',
         color: '#fff',
-        fontSize: '14px',
         cursor: 'pointer',
         touchAction: 'manipulation',
         flex: '0 0 auto',
-        whiteSpace: 'nowrap',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        lineHeight: '0',
       });
       b.addEventListener('mousedown', (e) => e.preventDefault());
       b.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
         // Auto-query must not block buttons; only heavy enrich uses busy.
-        if (busy && label === 'AI释义') return;
+        if (busy && actionId === 'ai') return;
         onClick();
       });
       return b;
     };
 
-    popupBtnRow.appendChild(mkBtn('翻译', () => doTranslate({ forceRefresh: true })));
-    popupBtnRow.appendChild(mkBtn('复制文本', () => copyLastSelectionText(), '#64748b'));
-    popupBtnRow.appendChild(mkBtn('加入生词本', () => doSave(false)));
-    popupBtnRow.appendChild(mkBtn('AI释义', () => doSave(true), '#7c3aed'));
-    popupBtnRow.appendChild(mkBtn('我的生词本', () => { hidePopup(); showLocalPanel(); }, '#0f766e'));
+    popupBtnRow.appendChild(mkIconBtn('翻译', 'translate', () => doTranslate({ forceRefresh: true }), '#2563eb', 'translate'));
+    popupBtnRow.appendChild(mkIconBtn('复制文本', 'copy', () => copyLastSelectionText(), '#64748b', 'copy'));
+    popupBtnRow.appendChild(mkIconBtn('加入生词本', 'addVocab', () => doSave(false), '#2563eb', 'add'));
+    popupBtnRow.appendChild(mkIconBtn('AI释义', 'ai', () => doSave(true), '#7c3aed', 'ai'));
+    popupBtnRow.appendChild(mkIconBtn('我的生词本', 'vocab', () => { hidePopup(); showLocalPanel(); }, '#0f766e', 'vocab'));
 
-    popup.appendChild(popupBtnRow);
+    // Result nearer selection: append result first, toolbar second.
     ensurePopupResultEl();
     resetPopupResultSlots();
+    popup.appendChild(popupBtnRow);
     document.documentElement.appendChild(popup);
-    // Result starts hidden, so width is toolbar-driven. Lock it so the result
-    // card stretches to the same width instead of a narrower 360px cap.
+    // Result starts hidden, so width is toolbar-driven. Lock a sensible min width
+    // so the result card has room once it appears.
     try {
-      const w = popup.offsetWidth;
+      const w = Math.max(popup.offsetWidth || 0, 200);
       if (w > 0) popup.style.width = w + 'px';
     } catch { /* ignore */ }
     repositionPopup(rect);
@@ -2078,6 +2187,7 @@
         setPopupResult(stub, 'hint');
         toast('请先配置 DeepSeek');
       }
+      if (lastSel.rect) repositionPopup(lastSel.rect);
       return;
     }
 
@@ -2102,6 +2212,7 @@
       if (reqId !== selectionGen) return; // stale
       const body = formatCacheResult(record) || '(空)';
       setModelRow(body, fromCache ? 'cache' : 'ok');
+      if (lastSel.rect) repositionPopup(lastSel.rect);
     } catch (e) {
       if (reqId !== selectionGen) return;
       if (localHit) {
@@ -2109,6 +2220,7 @@
       } else {
         setModelRow('翻译失败：' + (e.message || String(e)), 'error');
       }
+      if (lastSel.rect) repositionPopup(lastSel.rect);
     }
   }
 
@@ -2347,6 +2459,22 @@
     hidePopup();
     selectionGen += 1;
   }, true);
+
+  window.addEventListener('resize', () => {
+    if (!popup) return;
+    try {
+      const sel = window.getSelection && window.getSelection();
+      if (sel && sel.rangeCount) {
+        const r = sel.getRangeAt(0).getBoundingClientRect();
+        if (r && (r.width || r.height)) {
+          lastSel.rect = r;
+          repositionPopup(r);
+          return;
+        }
+      }
+    } catch { /* ignore */ }
+    if (lastSel.rect) repositionPopup(lastSel.rect);
+  });
 
 
   function getSelectionTextForCopy() {
