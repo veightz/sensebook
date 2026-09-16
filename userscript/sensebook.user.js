@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609162340
+// @version      0.1.202609162350
 // @description  划词自动查询 / 翻译 / 加入生词本 / 存本并释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -198,7 +198,7 @@
       btn.addEventListener('click', () => {
         try {
           if (typeof showLlmSettingsPanel === 'function') showLlmSettingsPanel();
-          else console.warn('[Sensebook] 请在油猴菜单打开 LLM 设置');
+          else console.warn('[Sensebook] 请在油猴菜单打开 DeepSeek 设置');
         } catch (e) {
           console.error('[Sensebook]', (e && e.message) || e, e);
         }
@@ -748,6 +748,7 @@
   let popupResultEl = null;
   let panel = null;
   let llmPanelHost = null;
+  let appSettingsPanelHost = null;
   let lastSel = { text: '', sentence: '', rect: null };
   let busy = false; // only for heavy manual 存本并释义 / optional server paths
   let translateInFlight = false; // ignore duplicate 翻译 clicks while lookup runs
@@ -771,7 +772,10 @@
 
   function eventInsideLlmSettings(e) {
     const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
-    return path.length ? path.includes(llmPanelHost) : e.target === llmPanelHost;
+    const hosts = [llmPanelHost, appSettingsPanelHost].filter(Boolean);
+    if (!hosts.length) return false;
+    if (path.length) return hosts.some((h) => path.includes(h));
+    return hosts.some((h) => e.target === h);
   }
 
   function toast(msg) {
@@ -1449,11 +1453,19 @@
     }
   }
 
+  function hideAppSettingsPanel() {
+    if (appSettingsPanelHost) {
+      appSettingsPanelHost.remove();
+      appSettingsPanelHost = null;
+    }
+  }
+
   /**
-   * In-page DeepSeek LLM settings (Shadow DOM).
-   * Replaces scattered prompt() menus. Keeps sensebook_llm_* keys.
+   * In-page DeepSeek API settings only (Shadow DOM).
+   * Auto-query / vocab prefs live in showAppSettingsPanel.
    */
   function showLlmSettingsPanel() {
+    hideAppSettingsPanel();
     hideLlmSettingsPanel();
 
     const host = document.createElement('div');
@@ -1571,9 +1583,9 @@
   .err { color: #b91c1c; }
   .info { color: #475569; }
 </style>
-<div class="card" role="dialog" aria-label="Sensebook LLM 设置">
-  <h2>LLM 设置</h2>
-  <p class="sub">Key 仅保存在本机油猴存储，不经过 Sensebook 服务器。可选同步设置请用独立菜单。</p>
+<div class="card" role="dialog" aria-label="DeepSeek 设置">
+  <h2>DeepSeek 设置</h2>
+  <p class="sub">API Key / 模型仅保存在本机油猴存储。自动查询等应用偏好请到「Sensebook 设置」。</p>
   <span class="badge">供应商：DeepSeek（当前仅支持）</span>
 
   <label>Base URL <span class="hint">OpenAI 兼容 /v1 根路径</span></label>
@@ -1589,30 +1601,6 @@
 
   <label>模型 <span class="hint">默认 deepseek-flash，可改</span></label>
   <input type="text" id="model" autocomplete="off" spellcheck="false" />
-
-  <label style="display:flex;align-items:center;gap:8px;font-weight:600;margin-top:14px;">
-    <input type="checkbox" id="autoQuery" style="width:18px;height:18px;" />
-    选中自动查询
-  </label>
-  <div class="hint" style="margin-top:4px;">划词后约 0.35 秒静默查询；结果与缓存可在「查询记录」回看。</div>
-
-  <div id="autoQueryModeWrap" style="margin-top:10px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
-    <div style="font-weight:600;font-size:13px;margin-bottom:8px;">自动查询方式</div>
-    <label style="display:flex;align-items:center;gap:8px;font-weight:500;margin:0 0 6px;">
-      <input type="radio" name="autoQueryMode" id="autoQueryModeSense" value="sense" style="width:16px;height:16px;" />
-      语境释义
-    </label>
-    <label style="display:flex;align-items:center;gap:8px;font-weight:500;margin:0 0 8px;">
-      <input type="radio" name="autoQueryMode" id="autoQueryModeTranslate" value="translate" style="width:16px;height:16px;" />
-      翻译
-    </label>
-    <div class="hint" style="margin:0 0 8px;">默认「语境释义」：显示词义/句意（与「存本并释义」同提示词）。「翻译」走本地词库 + 模型双出。</div>
-    <label id="autoSaveVocabLabel" style="display:flex;align-items:center;gap:8px;font-weight:600;margin:0;">
-      <input type="checkbox" id="autoSaveVocab" style="width:18px;height:18px;" />
-      自动加入生词本
-    </label>
-    <div class="hint" style="margin-top:4px;">默认开启：自动查询（语境释义 / 翻译）成功后写入生词本；关闭后只展示、不自动入库。</div>
-  </div>
 
   <label style="display:flex;align-items:center;gap:8px;font-weight:600;margin-top:14px;">
     <input type="checkbox" id="llmThinking" style="width:18px;height:18px;" />
@@ -1645,23 +1633,6 @@
     modelInput.value = modelVal;
     keyInput.value = curKey;
     keyStatus.textContent = '当前：' + maskApiKey(curKey);
-    const autoQueryInput = $('autoQuery');
-    if (autoQueryInput) autoQueryInput.checked = isAutoQueryEnabled();
-    const modeSenseInput = $('autoQueryModeSense');
-    const modeTranslateInput = $('autoQueryModeTranslate');
-    const autoSaveVocabInput = $('autoSaveVocab');
-    const autoSaveVocabLabel = $('autoSaveVocabLabel');
-    const curMode = getAutoQueryMode();
-    if (modeSenseInput) modeSenseInput.checked = curMode === AUTO_QUERY_MODE_SENSE;
-    if (modeTranslateInput) modeTranslateInput.checked = curMode === AUTO_QUERY_MODE_TRANSLATE;
-    if (autoSaveVocabInput) {
-      autoSaveVocabInput.checked = isAutoSaveVocabEnabled();
-      autoSaveVocabInput.disabled = false;
-    }
-    if (autoSaveVocabLabel) {
-      autoSaveVocabLabel.style.opacity = '1';
-      autoSaveVocabLabel.style.pointerEvents = 'auto';
-    }
     const thinkingInput = $('llmThinking');
     if (thinkingInput) thinkingInput.checked = isLlmThinkingEnabled();
     const card = shadow.querySelector('.card');
@@ -1699,10 +1670,6 @@
       storeSet(LLM_API_KEY_KEY, key);
       storeSet(LLM_MODEL_KEY, model || DEFAULT_LLM_MODEL);
       storeSet(ONBOARDING_DONE_KEY, true);
-      if (autoQueryInput) setAutoQueryEnabled(!!autoQueryInput.checked);
-      if (modeTranslateInput && modeTranslateInput.checked) setAutoQueryMode(AUTO_QUERY_MODE_TRANSLATE);
-      else setAutoQueryMode(AUTO_QUERY_MODE_SENSE);
-      if (autoSaveVocabInput) setAutoSaveVocabEnabled(!!autoSaveVocabInput.checked);
       if (thinkingInput) storeSet(LLM_THINKING_KEY, !!thinkingInput.checked);
       updateFabState();
       // Reflect defaults in fields if user cleared
@@ -1710,7 +1677,7 @@
       if (!model) modelInput.value = DEFAULT_LLM_MODEL;
       keyStatus.textContent = '当前：' + maskApiKey(key);
       setStatus('已保存（本机）。' + (key ? '可用「测试连接」验证。' : '未填 Key 时「存本并释义」仍用本地 stub。'), 'ok');
-      toast(key ? 'DeepSeek LLM 设置已保存' : '已保存（无 Key，将使用 stub）');
+      toast(key ? 'DeepSeek 设置已保存' : '已保存（无 Key，将使用 stub）');
     };
 
     $('clearKey').onclick = () => {
@@ -1778,6 +1745,156 @@
     keyInput.focus();
   }
 
+
+  /**
+   * App prefs (auto-query etc.) — separate from DeepSeek API settings.
+   */
+  function showAppSettingsPanel() {
+    hideLlmSettingsPanel();
+    hideAppSettingsPanel();
+
+    const host = document.createElement('div');
+    host.id = 'sensebook-app-settings-host';
+    applyStyles(host, {
+      position: 'fixed',
+      inset: '0',
+      zIndex: '2147483647',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '16px',
+      boxSizing: 'border-box',
+      background: 'rgba(15,23,42,.45)',
+      fontFamily: 'system-ui,sans-serif',
+    });
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    shadow.innerHTML = `
+<style>
+  * { box-sizing: border-box; }
+  .card {
+    width: min(400px, 100%);
+    max-height: min(92vh, 640px);
+    overflow: auto;
+    background: #fff;
+    border-radius: 14px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.28);
+    padding: 18px 18px 16px;
+    color: #0f172a;
+  }
+  h2 { margin: 0 0 4px; font-size: 18px; font-weight: 700; }
+  .sub { margin: 0 0 14px; font-size: 12px; color: #64748b; line-height: 1.5; }
+  label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    margin: 12px 0 6px;
+    color: #334155;
+  }
+  .hint { font-weight: 400; color: #94a3b8; font-size: 11px; line-height: 1.45; }
+  .mode-box {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #f8fafc;
+  }
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 16px;
+  }
+  button {
+    min-height: 44px;
+    padding: 10px 14px;
+    border: none;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+  .primary { background: #0f172a; color: #fff; }
+  .ghost { background: transparent; color: #64748b; margin-left: auto; }
+  .status {
+    margin-top: 12px;
+    min-height: 18px;
+    font-size: 13px;
+    color: #047857;
+  }
+</style>
+<div class="card" role="dialog" aria-label="Sensebook 设置">
+  <h2>Sensebook 设置</h2>
+  <p class="sub">划词自动查询与生词本偏好（与 DeepSeek API Key 分开）。</p>
+
+  <label style="display:flex;align-items:center;gap:8px;font-weight:600;margin-top:4px;">
+    <input type="checkbox" id="autoQuery" style="width:18px;height:18px;" />
+    选中自动查询
+  </label>
+  <div class="hint" style="margin-top:4px;">划词后约 0.35 秒静默查询；结果与缓存可在「查询记录」回看。</div>
+
+  <div class="mode-box" id="autoQueryModeWrap">
+    <div style="font-weight:600;font-size:13px;margin-bottom:8px;">自动查询方式</div>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:500;margin:0 0 6px;">
+      <input type="radio" name="autoQueryMode" id="autoQueryModeSense" value="sense" style="width:16px;height:16px;" />
+      语境释义
+    </label>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:500;margin:0 0 8px;">
+      <input type="radio" name="autoQueryMode" id="autoQueryModeTranslate" value="translate" style="width:16px;height:16px;" />
+      翻译
+    </label>
+    <div class="hint" style="margin:0 0 8px;">默认「语境释义」：显示词义/句意（与「存本并释义」同提示词）。「翻译」走本地词库 + 模型双出。</div>
+    <label id="autoSaveVocabLabel" style="display:flex;align-items:center;gap:8px;font-weight:600;margin:0;">
+      <input type="checkbox" id="autoSaveVocab" style="width:18px;height:18px;" />
+      自动加入生词本
+    </label>
+    <div class="hint" style="margin-top:4px;">默认开启：自动查询成功后写入生词本；关闭后只展示、不自动入库。</div>
+  </div>
+
+  <div class="actions">
+    <button type="button" class="primary" id="save">保存</button>
+    <button type="button" class="ghost" id="close">关闭</button>
+  </div>
+  <div class="status" id="status"></div>
+</div>
+`;
+
+    const $ = (id) => shadow.getElementById(id);
+    const autoQueryInput = $('autoQuery');
+    const modeSenseInput = $('autoQueryModeSense');
+    const modeTranslateInput = $('autoQueryModeTranslate');
+    const autoSaveVocabInput = $('autoSaveVocab');
+    const statusEl = $('status');
+
+    if (autoQueryInput) autoQueryInput.checked = isAutoQueryEnabled();
+    const curMode = getAutoQueryMode();
+    if (modeSenseInput) modeSenseInput.checked = curMode === AUTO_QUERY_MODE_SENSE;
+    if (modeTranslateInput) modeTranslateInput.checked = curMode === AUTO_QUERY_MODE_TRANSLATE;
+    if (autoSaveVocabInput) autoSaveVocabInput.checked = isAutoSaveVocabEnabled();
+
+    const card = shadow.querySelector('.card');
+    card.addEventListener('click', (e) => e.stopPropagation());
+
+    $('close').onclick = () => hideAppSettingsPanel();
+    host.addEventListener('click', (e) => {
+      const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
+      const trueTarget = path.length ? path[0] : e.target;
+      if (trueTarget === host) hideAppSettingsPanel();
+    });
+
+    $('save').onclick = () => {
+      if (autoQueryInput) setAutoQueryEnabled(!!autoQueryInput.checked);
+      if (modeTranslateInput && modeTranslateInput.checked) setAutoQueryMode(AUTO_QUERY_MODE_TRANSLATE);
+      else setAutoQueryMode(AUTO_QUERY_MODE_SENSE);
+      if (autoSaveVocabInput) setAutoSaveVocabEnabled(!!autoSaveVocabInput.checked);
+      statusEl.textContent = '已保存（本机）。';
+      toast('Sensebook 设置已保存');
+    };
+
+    document.documentElement.appendChild(host);
+    appSettingsPanelHost = host;
+  }
 
   function formatTimeShort(iso) {
     if (!iso) return '';
@@ -2952,7 +3069,7 @@
     try {
       const node = sel.anchorNode;
       const el = node && (node.nodeType === 3 ? node.parentElement : node);
-      if (el && el.closest && el.closest('#sensebook-popup, #sensebook-panel, #sensebook-fab-root, #sensebook-llm-settings-host')) {
+      if (el && el.closest && el.closest('#sensebook-popup, #sensebook-panel, #sensebook-fab-root, #sensebook-llm-settings-host, #sensebook-app-settings-host')) {
         return;
       }
     } catch { /* ignore */ }
@@ -3503,21 +3620,10 @@
       return button;
     };
 
-    let autoQueryChip = null;
     fabSheet.appendChild(makeAction('DeepSeek 设置', showLlmSettingsPanel));
+    fabSheet.appendChild(makeAction('Sensebook 设置', showAppSettingsPanel));
     fabSheet.appendChild(makeAction('我的生词本', showLocalPanel));
     fabSheet.appendChild(makeAction('查询记录', () => showQueryHistoryPanel()));
-    autoQueryChip = makeAction(
-      isAutoQueryEnabled() ? '自动查询：开' : '自动查询：关',
-      () => {
-        setAutoQueryEnabled(!isAutoQueryEnabled());
-        toast(isAutoQueryEnabled() ? '已开启选中自动查询' : '已关闭选中自动查询');
-        if (autoQueryChip) {
-          autoQueryChip.textContent = isAutoQueryEnabled() ? '自动查询：开' : '自动查询：关';
-        }
-      }
-    );
-    fabSheet.appendChild(autoQueryChip);
 
     fabButton = document.createElement('button');
     fabButton.type = 'button';
@@ -3656,8 +3762,11 @@
       gmMenu('Sensebook：查询记录', () => {
         showQueryHistoryPanel();
       });
-      gmMenu('Sensebook：LLM 设置', () => {
+      gmMenu('Sensebook：DeepSeek 设置', () => {
         showLlmSettingsPanel();
+      });
+      gmMenu('Sensebook：Sensebook 设置', () => {
+        showAppSettingsPanel();
       });
       gmMenu('Sensebook：登录/同步（可选）— API 地址', () => {
         const cur = getApiUrl();
@@ -3697,7 +3806,7 @@
         toast(
           (hasLlmConfig()
             ? '本地优先：加入生词本在本机；已配置 DeepSeek，「存本并释义」将直连模型'
-            : '默认本地优先：加入生词本写入油猴存储。菜单「LLM 设置」填写 DeepSeek API Key 后可真实「存本并释义」') +
+            : '默认本地优先：加入生词本写入油猴存储。菜单「DeepSeek 设置」填写 API Key 后可真实「存本并释义」') +
             ' · ' + getLocalDictStatusText() +
             '（dict version 与脚本 @version 独立）'
         );
