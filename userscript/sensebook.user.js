@@ -3,8 +3,8 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609162052
-// @description  划词自动查询 / 翻译 / 加入生词本 / AI 释义 — Sensebook（本地词库 + 模型双出）
+// @version      0.1.202609162057
+// @description  划词自动查询 / 翻译 / 加入生词本 / 存本并释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
 // @grant        GM_getValue
@@ -702,7 +702,7 @@
   let panel = null;
   let llmPanelHost = null;
   let lastSel = { text: '', sentence: '', rect: null };
-  let busy = false; // only for heavy manual AI释义 / optional server paths
+  let busy = false; // only for heavy manual 存本并释义 / optional server paths
   let selectionGen = 0; // bumps on each new selection; stale responses discard
   let autoQueryTimer = null;
   const inFlightByCacheKey = new Map(); // cacheKey -> Promise (dedupe)
@@ -851,12 +851,11 @@
         lineHeight: '1.35',
         fontFamily: 'system-ui,sans-serif',
         fontWeight: '500',
-        whiteSpace: 'nowrap',
+        whiteSpace: 'normal',
         pointerEvents: 'none',
         boxShadow: '0 2px 8px rgba(0,0,0,.22)',
-        maxWidth: 'calc(100vw - 16px)',
+        maxWidth: 'min(280px, calc(100vw - 16px))',
         overflow: 'hidden',
-        textOverflow: 'ellipsis',
       });
       iconTipEl = tip;
       document.documentElement.appendChild(tip);
@@ -980,6 +979,8 @@
       return;
     }
     el.style.display = 'block';
+    el.style.background = '#f8fafc';
+    el.style.borderColor = '#e2e8f0';
     localRow.style.display = 'block';
     applyStyles(localRow, {
       marginBottom: '8px',
@@ -1004,6 +1005,8 @@
     const modelRow = el.querySelector('[data-slot="model"]');
     if (!modelRow) return;
     el.style.display = 'block';
+    el.style.background = '#f8fafc';
+    el.style.borderColor = '#e2e8f0';
     modelRow.style.display = 'block';
     while (modelRow.firstChild) modelRow.removeChild(modelRow.firstChild);
 
@@ -1040,6 +1043,89 @@
 
   function setPopupLoading(msg) {
     setModelRow(msg || '查询中…', 'loading');
+  }
+
+  /**
+   * 存本并释义 result — labeled 词义 / 句意 (not the translate dual-out layout).
+   * kind: 'ok' | 'loading' | 'error' | 'hint'
+   */
+  function setSenseGlossResult({ ai_word_sense, ai_sentence_gloss } = {}, kind) {
+    const el = ensurePopupResultEl();
+    if (!el) return;
+    const localRow = el.querySelector('[data-slot="local"]');
+    const modelRow = el.querySelector('[data-slot="model"]');
+    if (!localRow || !modelRow) return;
+
+    el.style.display = 'block';
+    el.style.background = '#f5f3ff';
+    el.style.borderColor = '#ddd6fe';
+
+    while (localRow.firstChild) localRow.removeChild(localRow.firstChild);
+    while (modelRow.firstChild) modelRow.removeChild(modelRow.firstChild);
+
+    const sense = String(ai_word_sense || '').trim();
+    const gloss = String(ai_sentence_gloss || '').trim();
+    const k = kind || 'ok';
+
+    if (sense) {
+      localRow.style.display = 'block';
+      applyStyles(localRow, {
+        marginBottom: gloss ? '8px' : '0',
+        paddingBottom: gloss ? '8px' : '0',
+        borderBottom: gloss ? '1px solid #e9e5ff' : 'none',
+      });
+      _paintMetaHint(localRow, '词义', '#8b5cf6');
+      const text = document.createElement('div');
+      applyStyles(text, {
+        color: k === 'error' ? '#b91c1c' : '#0f172a',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+      });
+      text.textContent = sense;
+      localRow.appendChild(text);
+    } else {
+      localRow.style.display = 'none';
+      applyStyles(localRow, {
+        marginBottom: '0',
+        paddingBottom: '0',
+        borderBottom: 'none',
+      });
+    }
+
+    if (gloss || (!sense && k !== 'ok')) {
+      modelRow.style.display = 'block';
+      applyStyles(modelRow, {
+        marginBottom: '0',
+        paddingBottom: '0',
+        borderBottom: 'none',
+      });
+      _paintMetaHint(modelRow, '句意', '#a78bfa');
+      const text = document.createElement('div');
+      applyStyles(text, {
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+      });
+      if (!gloss && !sense) {
+        text.textContent = k === 'loading' ? '存本并释义中…' : (k === 'error' ? '释义失败' : '');
+      } else {
+        text.textContent = gloss || '';
+      }
+      if (k === 'error') text.style.color = '#b91c1c';
+      else if (k === 'loading') text.style.color = '#6d28d9';
+      else if (k === 'hint') text.style.color = '#64748b';
+      else text.style.color = '#0f172a';
+      modelRow.appendChild(text);
+    } else if (!sense) {
+      modelRow.style.display = 'none';
+    } else {
+      modelRow.style.display = 'none';
+    }
+  }
+
+  /** Translate-path body: translation only (never mix 词义/句意 into the blob). */
+  function formatTranslateResult(rec) {
+    if (!rec) return '';
+    return String(rec.translation || '').trim();
   }
 
   function _svgIcon(parts, viewBox) {
@@ -1194,10 +1280,11 @@
       order: '1',
     });
 
-    const mkIconBtn = (label, iconKey, onClick, bg, actionId) => {
+    const mkIconBtn = (label, iconKey, onClick, bg, actionId, tip) => {
       const b = document.createElement('button');
       b.type = 'button';
       // Instant custom Chinese hover tip + aria-label (do not rely on native title)
+      const tipText = tip || label;
       b.removeAttribute('title');
       b.setAttribute('aria-label', label);
       if (actionId) b.setAttribute('data-action', actionId);
@@ -1220,7 +1307,7 @@
         justifyContent: 'center',
         lineHeight: '0',
       });
-      b.addEventListener('pointerenter', () => showIconTip(b, label));
+      b.addEventListener('pointerenter', () => showIconTip(b, tipText));
       b.addEventListener('pointerleave', hideIconTip);
       b.addEventListener('blur', hideIconTip);
       b.addEventListener('mousedown', (e) => e.preventDefault());
@@ -1235,10 +1322,24 @@
       return b;
     };
 
-    popupBtnRow.appendChild(mkIconBtn('翻译', 'translate', () => doTranslate({ forceRefresh: true }), '#2563eb', 'translate'));
+    popupBtnRow.appendChild(mkIconBtn(
+      '翻译',
+      'translate',
+      () => doTranslate({ forceRefresh: true }),
+      '#2563eb',
+      'translate',
+      '仅翻译（本地词库 + 模型），不写入生词本'
+    ));
     popupBtnRow.appendChild(mkIconBtn('复制文本', 'copy', () => copyLastSelectionText(), '#64748b', 'copy'));
-    popupBtnRow.appendChild(mkIconBtn('加入生词本', 'addVocab', () => doSave(false), '#2563eb', 'add'));
-    popupBtnRow.appendChild(mkIconBtn('AI释义', 'ai', () => doSave(true), '#7c3aed', 'ai'));
+    popupBtnRow.appendChild(mkIconBtn('加入生词本', 'addVocab', () => doSave(false), '#2563eb', 'add', '只加入生词本，不生成释义'));
+    popupBtnRow.appendChild(mkIconBtn(
+      '存本并释义',
+      'ai',
+      () => doSave(true),
+      '#7c3aed',
+      'ai',
+      '存入生词本，并生成词义 / 句意（语境释义，非干译）'
+    ));
     popupBtnRow.appendChild(mkIconBtn('我的生词本', 'vocab', () => { hidePopup(); showLocalPanel(); }, '#0f766e', 'vocab'));
 
     // Result nearer selection: append result first, toolbar second.
@@ -1497,7 +1598,7 @@
       if (!base) baseInput.value = DEFAULT_LLM_BASE_URL;
       if (!model) modelInput.value = DEFAULT_LLM_MODEL;
       keyStatus.textContent = '当前：' + maskApiKey(key);
-      setStatus('已保存（本机）。' + (key ? '可用「测试连接」验证。' : '未填 Key 时 AI 释义仍用本地 stub。'), 'ok');
+      setStatus('已保存（本机）。' + (key ? '可用「测试连接」验证。' : '未填 Key 时「存本并释义」仍用本地 stub。'), 'ok');
       toast(key ? 'DeepSeek LLM 设置已保存' : '已保存（无 Key，将使用 stub）');
     };
 
@@ -1970,7 +2071,7 @@
           ${e.ai_sentence_gloss ? `<div style="font-size:12px;color:#475569;margin-top:4px;"><strong>句意：</strong>${escapeHtml(e.ai_sentence_gloss)}</div>` : ''}
           <div style="font-size:11px;color:#94a3b8;margin-top:8px;">${escapeHtml(e.created_at || '')}</div>
           <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
-            <button type="button" data-enrich-local="${escapeHtml(e.id)}" style="min-height:36px;padding:6px 10px;border:none;border-radius:8px;background:#7c3aed;color:#fff;cursor:pointer;font-size:13px;">AI 释义</button>
+            <button type="button" data-enrich-local="${escapeHtml(e.id)}" style="min-height:36px;padding:6px 10px;border:none;border-radius:8px;background:#7c3aed;color:#fff;cursor:pointer;font-size:13px;">存本并释义</button>
             <button type="button" data-del-local="${escapeHtml(e.id)}" style="min-height:36px;padding:6px 10px;border:none;border-radius:8px;background:#dc2626;color:#fff;cursor:pointer;font-size:13px;">删除</button>
           </div>
         </div>
@@ -1988,7 +2089,7 @@
         if (idx < 0) return;
         const entry = list[idx];
         busy = true;
-        toast('AI 释义中…');
+        toast('存本并释义中…');
         try {
           const result = await enrichLocalEntry(entry);
           patchLocalEntry(enrichId, {
@@ -1996,14 +2097,14 @@
             ai_word_sense: result.ai_word_sense,
             status: 'ready',
           });
-          toast(result.stub ? '已生成本地 stub 释义' : 'AI 释义完成');
+          toast(result.stub ? '已生成本地 stub 释义' : '存本并释义完成');
           // optional server mirror
           if (hasOptionalApi() && !result.stub) {
             optionalServerEnrich({ ...entry, ...result }).catch(() => {});
           }
         } catch (err) {
           patchLocalEntry(enrichId, { status: 'failed' });
-          toast('AI 释义失败：' + (err.message || String(err)));
+          toast('存本并释义失败：' + (err.message || String(err)));
         } finally {
           busy = false;
           showLocalPanel();
@@ -2295,7 +2396,7 @@
     if (!forceRefresh) {
       const hit = getCachedByKey(makeCacheKey(word, sentence));
       if (hit && hit.translation) {
-        setModelRow(formatCacheResult(hit) || hit.translation || '', 'cache');
+        setModelRow(formatTranslateResult(hit) || hit.translation || '', 'cache');
       } else {
         setModelRow('查询中…', 'loading');
       }
@@ -2311,7 +2412,7 @@
         forceRefresh,
       });
       if (reqId !== selectionGen) return; // stale
-      const body = formatCacheResult(record) || '(空)';
+      const body = formatTranslateResult(record) || '(空)';
       setModelRow(body, fromCache ? 'cache' : 'ok');
       if (lastSel.rect) repositionPopup(lastSel.rect);
     } catch (e) {
@@ -2361,14 +2462,14 @@
       if (reqId !== selectionGen) return;
 
       if (cacheHit && cacheHit.translation) {
-        setModelRow(formatCacheResult(cacheHit), 'cache');
+        setModelRow(formatTranslateResult(cacheHit) || '(空)', 'cache');
         // Still keep local row if present; no forced network refresh.
         return;
       }
 
       if (!hasLlmConfig()) {
         if (localHit) {
-          setModelRow('本地词库已命中；配置 DeepSeek 后可并行显示模型释义', 'hint');
+          setModelRow('本地词库已命中；配置 DeepSeek 后可并行显示模型译文', 'hint');
         } else {
           setModelRow('已配置自动查询，请先点「配置 DeepSeek」填写 API Key', 'hint');
         }
@@ -2384,7 +2485,7 @@
           forceRefresh: false,
         });
         if (reqId !== selectionGen) return;
-        const body = formatCacheResult(record) || '(空)';
+        const body = formatTranslateResult(record) || '(空)';
         setModelRow(body, fromCache ? 'cache' : 'ok');
         if (lastSel.rect) repositionPopup(lastSel.rect);
       } catch (e) {
@@ -2430,10 +2531,14 @@
         return;
       }
 
-      // AI 释义 path
+      // 存本并释义 path — save to vocab + contextual 词义/句意 (not dry translation)
       const reqId = selectionGen;
       busy = true;
-      setPopupLoading(hasLlmConfig() ? 'AI 释义中…' : '生成 stub 释义…');
+      resetPopupResultSlots();
+      setSenseGlossResult(
+        { ai_word_sense: '', ai_sentence_gloss: hasLlmConfig() ? '存本并释义中…' : '生成 stub 释义…' },
+        'loading'
+      );
 
       const entry = createLocalEntry({
         word,
@@ -2449,20 +2554,20 @@
           ai_word_sense: result.ai_word_sense,
           status: 'ready',
         });
+        // Cache sense fields only — do not overwrite translation with sense text
         upsertQueryCache({
           word,
           sentence,
           source_url,
           ai_word_sense: result.ai_word_sense,
           ai_sentence_gloss: result.ai_sentence_gloss,
-          translation: result.ai_word_sense || result.ai_sentence_gloss || '',
         });
         if (reqId === selectionGen && popup) {
-          setPopupResult(formatCacheResult({
-            translation: result.ai_word_sense || '',
+          setSenseGlossResult({
             ai_word_sense: result.ai_word_sense,
             ai_sentence_gloss: result.ai_sentence_gloss,
-          }), 'ok');
+          }, 'ok');
+          if (lastSel.rect) repositionPopup(lastSel.rect);
         }
 
         if (hasOptionalApi()) {
@@ -2474,27 +2579,33 @@
               status: 'ready',
             });
             toast(
-              (result.stub ? '已本地 stub 释义并同步：' : '已 AI 释义并可选同步：') + entry.word
+              (result.stub ? '已存本并生成本地 stub 释义（已同步）：' : '已存本并释义（已可选同步）：') + entry.word
             );
           } catch (syncErr) {
             toast(
-              (result.stub ? '已本地 stub 释义（同步失败）：' : '已 AI 释义（同步失败）：') +
+              (result.stub ? '已存本并生成本地 stub 释义（同步失败）：' : '已存本并释义（同步失败）：') +
                 entry.word
             );
           }
         } else {
           toast(
             (result.stub
-              ? '已加入生词本并生成 stub 释义（请先点「配置 DeepSeek」填写 API Key）：'
-              : '已加入生词本并 AI 释义：') + entry.word
+              ? '已存本并生成本地 stub 释义（请先点「配置 DeepSeek」填写 API Key）：'
+              : '已存本并释义：') + entry.word
           );
         }
+        busy = false;
+        // Keep popup open so structured 词义/句意 result stays visible
       } catch (llmErr) {
         patchLocalEntry(entry.id, { status: 'failed' });
-        toast('已加入生词本，但 AI 释义失败：' + (llmErr.message || String(llmErr)));
-      } finally {
+        if (reqId === selectionGen && popup) {
+          setSenseGlossResult({
+            ai_word_sense: '释义失败：' + (llmErr.message || String(llmErr)),
+            ai_sentence_gloss: '',
+          }, 'error');
+        }
+        toast('已加入生词本，但存本并释义失败：' + (llmErr.message || String(llmErr)));
         busy = false;
-        hidePopup();
       }
     } catch (e) {
       busy = false;
@@ -3280,8 +3391,8 @@
       gmMenu('Sensebook：关于本地模式', () => {
         toast(
           (hasLlmConfig()
-            ? '本地优先：加入生词本在本机；已配置 DeepSeek，AI 释义将直连模型'
-            : '默认本地优先：加入生词本写入油猴存储。菜单「LLM 设置」填写 DeepSeek API Key 后可真实 AI 释义') +
+            ? '本地优先：加入生词本在本机；已配置 DeepSeek，「存本并释义」将直连模型'
+            : '默认本地优先：加入生词本写入油猴存储。菜单「LLM 设置」填写 DeepSeek API Key 后可真实「存本并释义」') +
             ' · ' + getLocalDictStatusText() +
             '（dict version 与脚本 @version 独立）'
         );

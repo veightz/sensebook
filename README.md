@@ -1,6 +1,6 @@
 # Sensebook
 
-浏览器优先的划词词汇工具（中文界面）。在任意网页划词 → 翻译 / 加入生词本 / AI 释义。
+浏览器优先的划词词汇工具（中文界面）。在任意网页划词 → 翻译 / 加入生词本 / 存本并释义。
 
 > **默认可不登录**：油猴脚本将词条保存在浏览器本地存储（`GM_setValue` / `localStorage`）。服务器与账号仅用于**可选**同步，不是 MVP 必需。
 
@@ -38,9 +38,9 @@ Chrome 138+ 需要单独打开油猴的用户脚本权限，否则脚本显示�
 2. 新建脚本，粘贴 [`userscript/sensebook.user.js`](userscript/sensebook.user.js) 全文并保存。
 3. 打开任意网页划选单词：
    - **选中自动查询**（默认开）→ 短词先出「本地词库」释义，模型并行补第二行（「查询中…」）；整句仅模型。可在 LLM 设置或 FAB 中开关（键名 `sensebook_auto_query`）
-   - **翻译** → 弹层结果区显示译文；命中本地缓存则即时回看，可再点翻译强制刷新
+   - **翻译** → 仅翻译（本地词库 + 模型双出），**不**写入生词本；命中本地缓存则即时回看，可再点翻译强制刷新
    - **加入生词本** → 写入本地生词本（键名 `sensebook_entries`），**无需 API / Token**
-   - **AI释义** → 已配置 DeepSeek Key 时直连生成真实释义；未配置时使用本地 stub；成功结果也会写入查询缓存
+   - **存本并释义** → 存入生词本，并生成语境「词义 / 句意」（非干译）；已配置 DeepSeek Key 时直连模型，否则本地 stub；结果区与翻译布局区分显示
 4. 油猴菜单 / FAB：**「我的生词本」**、**「查询记录」**（本地缓存 `sensebook_query_cache`，约 250 条 LRU）、**「LLM 设置」**。也可从划词弹层的 **DeepSeek** / **我的生词本** 进入。
 
 本地模式说明也会在菜单「关于本地模式」中提示。登录相关菜单标注为 **「登录/同步（可选）」**。
@@ -66,9 +66,9 @@ Chrome 138+ 需要单独打开油猴的用户脚本权限，否则脚本显示�
 数据来源与许可见 [`userscript/dict/SOURCE.md`](userscript/dict/SOURCE.md)（ECDICT · MIT）。下载失败时静默回退为仅模型。油猴菜单提供「刷新本地词库」「清除本地词库缓存」。
 
 
-## 配置真实 AI 释义（DeepSeek）
+## 配置真实「存本并释义」（DeepSeek）
 
-AI 释义走油猴 **直连** DeepSeek 的 OpenAI 兼容接口（`GM_xmlhttpRequest` → `{base}/chat/completions`），**不经过** Sensebook 服务器。Key 仅保存在本机油猴存储。当前 P0 **仅支持 DeepSeek**。
+「存本并释义」走油猴 **直连** DeepSeek 的 OpenAI 兼容接口（`GM_xmlhttpRequest` → `{base}/chat/completions`），**不经过** Sensebook 服务器。Key 仅保存在本机油猴存储。当前 P0 **仅支持 DeepSeek**。
 
 1. 打开油猴菜单 **「Sensebook：LLM 设置」**，或使用划词弹层 **DeepSeek** 按钮、词库面板顶部 **配置 DeepSeek**、右下角 Sensebook FAB，弹出页内设置面板（Shadow DOM）。
 2. 面板字段：
@@ -81,7 +81,7 @@ AI 释义走油猴 **直连** DeepSeek 的 OpenAI 兼容接口（`GM_xmlhttpRequ
 4. 可选点 **测试连接**：向 `{base}/chat/completions` 发一条极小请求，面板内显示成功 / 鉴权失败 / 网络错误。
 5. **清除 Key** 只删 Key，保留 URL 与模型。
 
-未配置 Key 时 AI 释义仍走本地 stub，本地加入生词本不受影响。配置好后划词点 **AI释义**，成功则 `status=ready`；失败保留词条且 `status=failed`。
+未配置 Key 时「存本并释义」仍走本地 stub，本地加入生词本不受影响。配置好后划词点 **存本并释义**，成功则 `status=ready`；失败保留词条且 `status=failed`。
 
 > **安全提醒**：API Key 只存在你本机的油猴/`GM_setValue` 中，请勿提交到仓库或发给他人。
 
@@ -134,12 +134,12 @@ curl -s -X POST http://127.0.0.1:8787/auth/login \
 1. 只安装用户脚本，**不要**配置 API / Token / LLM Key。
 2. 任意网页划词 → **加入生词本** → toast 提示已加入生词本。
 3. 菜单打开 **我的生词本（本地）**，可见刚存的词条。
-4. **AI释义**（无 Key）应写入 stub 句意/词义，`status` 为 `ready`。
+4. **存本并释义**（无 Key）应写入 stub 句意/词义，`status` 为 `ready`；结果区应分栏显示「词义」「句意」。
 
 ### B. 真实 LLM（油猴直连 DeepSeek）
 
 1. 菜单打开 **「Sensebook：LLM 设置」**，填入 DeepSeek API Key（URL/模型可用默认），保存；可用「测试连接」。
-2. 划词 → **AI释义** → 等待加载 → 本地词库出现中文句意/词义，`status=ready`。
+2. 划词 → **存本并释义** → 等待加载 → 本地词库出现中文句意/词义，`status=ready`。
 3. 故意填错 Key → 应 toast 失败且词条 `status=failed`（词条仍保留）。
 
 ### C. 可选服务端联调
