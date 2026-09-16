@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609161135
+// @version      0.1.202609161142
 // @description  划词自动查询 / 翻译 / 存词 / AI 释义 — Sensebook（本地缓存与查询记录）
 // @author       Sensebook
 // @match        *://*/*
@@ -648,10 +648,6 @@
     popupBtnRow.appendChild(mkBtn('翻译', () => doTranslate({ forceRefresh: true })));
     popupBtnRow.appendChild(mkBtn('存词', () => doSave(false)));
     popupBtnRow.appendChild(mkBtn('AI释义', () => doSave(true), '#7c3aed'));
-    popupBtnRow.appendChild(mkBtn('DeepSeek', () => {
-      hidePopup();
-      setTimeout(() => showLlmSettingsPanel(), 50);
-    }, '#475569'));
     popupBtnRow.appendChild(mkBtn('生词', () => { hidePopup(); showLocalPanel(); }, '#0f766e'));
 
     popup.appendChild(popupBtnRow);
@@ -1724,7 +1720,7 @@
     }
 
     if (!hasLlmConfig()) {
-      setPopupResult('已配置自动查询，请先点「DeepSeek」填写 API Key', 'hint');
+      setPopupResult('已配置自动查询，请先点「配置 DeepSeek」填写 API Key', 'hint');
       return;
     }
 
