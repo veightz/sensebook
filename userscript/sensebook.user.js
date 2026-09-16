@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609162044
+// @version      0.1.202609162052
 // @description  划词自动查询 / 翻译 / 加入生词本 / AI 释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -2516,15 +2516,40 @@
     return null;
   }
 
-  // After scroll-dismiss, do not immediately re-show the same selection via touchend.
-  let skipReshowSameSelection = false;
+  /** Keep popup near live selection (clamp/flip), or hide if selection is gone. */
+  function followSelectionOrHide() {
+    if (!popup) return;
+    try {
+      const sel = window.getSelection && window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.rangeCount) {
+        hidePopup();
+        return;
+      }
+      const text = String(sel.toString() || '').trim();
+      if (!text) {
+        hidePopup();
+        return;
+      }
+      const range = sel.getRangeAt(0);
+      const rect = _selectionRect(range);
+      if (rect) {
+        if (lastSel) {
+          lastSel.text = text;
+          lastSel.rect = rect;
+        }
+        repositionPopup(rect);
+        return;
+      }
+    } catch { /* ignore */ }
+    if (lastSel && lastSel.rect) repositionPopup(lastSel.rect);
+  }
 
   function onSelectionChange() {
     // Do not gate on busy — auto-query / parallel lookups must allow new selection
     // (stale responses discarded via selectionGen).
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) {
-      skipReshowSameSelection = false;
+      hidePopup();
       return;
     }
     const text = sel.toString().trim();
@@ -2551,13 +2576,6 @@
       repositionPopup(rect);
       return;
     }
-
-    // Scroll hid the popup; keep it hidden until the selection text changes.
-    if (skipReshowSameSelection && lastSel && lastSel.text === text) {
-      lastSel.rect = rect;
-      return;
-    }
-    skipReshowSameSelection = false;
 
     selectionGen += 1;
     const reqId = selectionGen;
@@ -2610,26 +2628,13 @@
       /* keep panel open unless closed explicitly */
     }
   });
+  // While selection remains, follow it on scroll/resize — do not permanently dismiss.
   document.addEventListener('scroll', () => {
-    if (popup) skipReshowSameSelection = true;
-    hidePopup();
-    selectionGen += 1;
+    followSelectionOrHide();
   }, true);
 
   window.addEventListener('resize', () => {
-    if (!popup) return;
-    try {
-      const sel = window.getSelection && window.getSelection();
-      if (sel && sel.rangeCount) {
-        const r = sel.getRangeAt(0).getBoundingClientRect();
-        if (r && (r.width || r.height)) {
-          lastSel.rect = r;
-          repositionPopup(r);
-          return;
-        }
-      }
-    } catch { /* ignore */ }
-    if (lastSel.rect) repositionPopup(lastSel.rect);
+    followSelectionOrHide();
   });
 
 
