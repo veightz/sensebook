@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609161956
+// @version      0.1.202609161959
 // @description  划词自动查询 / 翻译 / 加入生词本 / AI 释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -1087,10 +1087,10 @@
     popupBtnRow.setAttribute('data-sensebook-toolbar', '1');
     applyStyles(popupBtnRow, {
       display: 'flex',
-      gap: '4px',
-      flexWrap: 'wrap',
+      gap: '0',
+      flexWrap: 'nowrap',
       alignItems: 'center',
-      justifyContent: 'flex-end',
+      justifyContent: 'space-between',
       width: '100%',
       maxWidth: '100%',
       boxSizing: 'border-box',
