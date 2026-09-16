@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609162020
+// @version      0.1.202609162044
 // @description  划词自动查询 / 翻译 / 加入生词本 / AI 释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -1114,9 +1114,22 @@
    * clamp fully into the viewport. Results stay nearer selection than toolbar
    * via flex-direction (column below, column-reverse above).
    */
+  function _isCoarsePointer() {
+    try {
+      return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+    } catch {
+      return 'ontouchstart' in window;
+    }
+  }
+
   function repositionPopup(rect) {
     if (!popup || !rect) return;
     const margin = 8;
+    // Android/iOS system selection bar usually sits above the highlight; keep Sensebook
+    // clear of it (prefer below + larger gap on coarse pointers).
+    const nativeBarGap = _isCoarsePointer() ? 52 : 0;
+    const gapBelow = margin + (_isCoarsePointer() ? 12 : 0);
+    const gapAbove = margin + nativeBarGap;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
 
@@ -1124,12 +1137,12 @@
 
     const pw = popup.offsetWidth || 0;
     const ph = popup.offsetHeight || 0;
-    const spaceBelow = vh - rect.bottom - margin;
-    const spaceAbove = rect.top - margin;
-    // Prefer below; flip above when content does not fit below and above has more room.
+    const spaceBelow = vh - rect.bottom - gapBelow;
+    const spaceAbove = rect.top - gapAbove;
+    // Prefer below (away from native bar); flip above only when below cannot fit and above is roomier.
     const placeAbove = ph > spaceBelow && spaceAbove > spaceBelow;
 
-    let top = placeAbove ? (rect.top - ph - margin) : (rect.bottom + margin);
+    let top = placeAbove ? (rect.top - ph - gapAbove) : (rect.bottom + gapBelow);
     let left = rect.left + rect.width / 2 - pw / 2;
 
     if (left < margin) left = margin;
@@ -2490,11 +2503,28 @@
     }
   }
 
+  function _selectionRect(range) {
+    try {
+      let rect = range.getBoundingClientRect();
+      if (rect && (rect.width || rect.height)) return rect;
+      const list = range.getClientRects && range.getClientRects();
+      if (list && list.length) {
+        const r = list[0];
+        if (r && (r.width || r.height)) return r;
+      }
+    } catch { /* ignore */ }
+    return null;
+  }
+
+  // After scroll-dismiss, do not immediately re-show the same selection via touchend.
+  let skipReshowSameSelection = false;
+
   function onSelectionChange() {
     // Do not gate on busy — auto-query / parallel lookups must allow new selection
     // (stale responses discarded via selectionGen).
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) {
+      skipReshowSameSelection = false;
       return;
     }
     const text = sel.toString().trim();
@@ -2512,8 +2542,23 @@
     } catch { /* ignore */ }
 
     const range = sel.getRangeAt(0);
-    const rect = range.getBoundingClientRect();
-    if (!rect.width && !rect.height) return;
+    const rect = _selectionRect(range);
+    if (!rect) return;
+
+    // Same selection already shown (e.g. mouseup + selectionchange): refresh position only.
+    if (popup && lastSel && lastSel.text === text) {
+      lastSel.rect = rect;
+      repositionPopup(rect);
+      return;
+    }
+
+    // Scroll hid the popup; keep it hidden until the selection text changes.
+    if (skipReshowSameSelection && lastSel && lastSel.text === text) {
+      lastSel.rect = rect;
+      return;
+    }
+    skipReshowSameSelection = false;
+
     selectionGen += 1;
     const reqId = selectionGen;
     lastSel = {
@@ -2525,12 +2570,34 @@
     scheduleAutoQuery(reqId);
   }
 
+  // Android Chrome long-press often skips touchend/mouseup; selectionchange is the reliable signal.
+  // Debounce so mid-drag handle moves settle before we show (~50–150ms).
+  let selectionCheckTimer = null;
+  function scheduleSelectionCheck(delayMs) {
+    if (selectionCheckTimer) {
+      clearTimeout(selectionCheckTimer);
+      selectionCheckTimer = null;
+    }
+    selectionCheckTimer = setTimeout(() => {
+      selectionCheckTimer = null;
+      onSelectionChange();
+    }, delayMs);
+  }
+
   document.addEventListener('mouseup', () => {
-    setTimeout(onSelectionChange, 10);
+    scheduleSelectionCheck(10);
   });
   document.addEventListener('touchend', () => {
-    setTimeout(onSelectionChange, 50);
+    scheduleSelectionCheck(100);
   }, { passive: true });
+  document.addEventListener('pointerup', (e) => {
+    if (e.pointerType === 'mouse') return; // mouseup already handles desktop
+    scheduleSelectionCheck(100);
+  }, { passive: true });
+  document.addEventListener('selectionchange', () => {
+    // Primary path on Android: fires when selection finalizes / handles settle (no touchend).
+    scheduleSelectionCheck(_isCoarsePointer() ? 120 : 150);
+  });
 
   document.addEventListener('mousedown', (e) => {
     if (llmPanelHost && eventInsideLlmSettings(e)) return;
@@ -2544,6 +2611,7 @@
     }
   });
   document.addEventListener('scroll', () => {
+    if (popup) skipReshowSameSelection = true;
     hidePopup();
     selectionGen += 1;
   }, true);
