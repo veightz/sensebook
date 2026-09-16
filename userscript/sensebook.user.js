@@ -3,8 +3,8 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609161204
-// @description  划词自动查询 / 翻译 / 存词 / AI 释义 — Sensebook（本地词库 + 模型双出）
+// @version      0.1.202609161459
+// @description  划词自动查询 / 翻译 / 加入生词本 / AI 释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
 // @grant        GM_getValue
@@ -892,9 +892,9 @@
     };
 
     popupBtnRow.appendChild(mkBtn('翻译', () => doTranslate({ forceRefresh: true })));
-    popupBtnRow.appendChild(mkBtn('存词', () => doSave(false)));
+    popupBtnRow.appendChild(mkBtn('加入生词本', () => doSave(false)));
     popupBtnRow.appendChild(mkBtn('AI释义', () => doSave(true), '#7c3aed'));
-    popupBtnRow.appendChild(mkBtn('生词', () => { hidePopup(); showLocalPanel(); }, '#0f766e'));
+    popupBtnRow.appendChild(mkBtn('我的生词本', () => { hidePopup(); showLocalPanel(); }, '#0f766e'));
 
     popup.appendChild(popupBtnRow);
     ensurePopupResultEl();
@@ -1309,7 +1309,7 @@
 
     const vocabBtn = document.createElement('button');
     vocabBtn.type = 'button';
-    vocabBtn.textContent = '生词本';
+    vocabBtn.textContent = '我的生词本';
     Object.assign(vocabBtn.style, {
       minHeight: '40px',
       padding: '8px 10px',
@@ -1444,7 +1444,7 @@
         <div style="font-size:11px;color:#94a3b8;word-break:break-all;">${escapeHtml(rec.source_url || '')}</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
-        <button type="button" data-act="save" style="min-height:44px;padding:10px 14px;border:none;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer;font-size:14px;">存词</button>
+        <button type="button" data-act="save" style="min-height:44px;padding:10px 14px;border:none;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer;font-size:14px;">加入生词本</button>
         <button type="button" data-act="requery" style="min-height:44px;padding:10px 14px;border:none;border-radius:8px;background:#7c3aed;color:#fff;cursor:pointer;font-size:14px;">再查一次</button>
       </div>
     `;
@@ -1470,7 +1470,7 @@
             });
           }
         }
-        toast('已存入生词本：' + rec.word);
+        toast('已加入生词本：' + rec.word);
         return;
       }
       if (act === 'requery') {
@@ -1531,7 +1531,7 @@
     });
     const llmHint = hasLlmConfig() ? 'LLM 已配置' : '未配置 LLM Key';
     header.innerHTML = `<div>
-      <div style="font-weight:700;font-size:16px;">我的生词（本地）</div>
+      <div style="font-weight:700;font-size:16px;">我的生词本（本地）</div>
       <div style="font-size:12px;color:#64748b;margin-top:2px;">无需登录 · ${llmHint} · 共 ${entries.length} 条</div>
     </div>`;
     const headerActions = document.createElement('div');
@@ -1606,7 +1606,7 @@
     });
 
     if (!entries.length) {
-      body.innerHTML = '<div style="padding:16px;color:#64748b;font-size:14px;">暂无本地词条。划词后点「存词」即可保存到本机。</div>';
+      body.innerHTML = '<div style="padding:16px;color:#64748b;font-size:14px;">暂无本地词条。划词后点「加入生词本」即可保存到本机。</div>';
     } else {
       body.innerHTML = entries.map((e) => `
         <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:10px;" data-id="${escapeHtml(e.id)}">
@@ -2064,12 +2064,12 @@
               headers: authHeaders(),
               body: { word: entry.word, sentence: entry.sentence, source_url: entry.source_url },
             });
-            toast('已本地存词（并已可选同步）：' + entry.word);
+            toast('已加入生词本（并已可选同步）：' + entry.word);
           } catch (syncErr) {
-            toast('已本地存词（同步失败：' + syncErr.message + '）：' + entry.word);
+            toast('已加入生词本（同步失败：' + syncErr.message + '）：' + entry.word);
           }
         } else {
-          toast('已本地存词：' + entry.word);
+          toast('已加入生词本：' + entry.word);
         }
         hidePopup();
         return;
@@ -2130,20 +2130,20 @@
         } else {
           toast(
             (result.stub
-              ? '已本地存词并生成 stub 释义（请先点「配置 DeepSeek」填写 API Key）：'
-              : '已本地存词并 AI 释义：') + entry.word
+              ? '已加入生词本并生成 stub 释义（请先点「配置 DeepSeek」填写 API Key）：'
+              : '已加入生词本并 AI 释义：') + entry.word
           );
         }
       } catch (llmErr) {
         patchLocalEntry(entry.id, { status: 'failed' });
-        toast('已存词，但 AI 释义失败：' + (llmErr.message || String(llmErr)));
+        toast('已加入生词本，但 AI 释义失败：' + (llmErr.message || String(llmErr)));
       } finally {
         busy = false;
         hidePopup();
       }
     } catch (e) {
       busy = false;
-      toast(e.message || '存词失败');
+      toast(e.message || '加入生词本失败');
       hidePopup();
     }
   }
@@ -2278,7 +2278,7 @@
       return button;
     };
     fabSheet.appendChild(makeAction('DeepSeek 设置', showLlmSettingsPanel, '#7c3aed'));
-    fabSheet.appendChild(makeAction('我的生词', showLocalPanel, '#0f766e'));
+    fabSheet.appendChild(makeAction('我的生词本', showLocalPanel, '#0f766e'));
     fabSheet.appendChild(makeAction('查询记录', () => showQueryHistoryPanel(), '#2563eb'));
     fabSheet.appendChild(makeAction(
       isAutoQueryEnabled() ? '自动查询：开' : '自动查询：关',
@@ -2380,7 +2380,7 @@
 
   function registerSensebookMenus() {
     try {
-      gmMenu('Sensebook：我的生词（本地）', () => {
+      gmMenu('Sensebook：我的生词本（本地）', () => {
         showLocalPanel();
       });
       gmMenu('Sensebook：查询记录', () => {
@@ -2400,7 +2400,7 @@
       gmMenu('Sensebook：登录/同步（可选）— Token', () => {
         const cur = getToken();
         const v = prompt(
-          '【可选】JWT Token（网页登录后复制）\n本地存词不需要 Token。',
+          '【可选】JWT Token（网页登录后复制）\n加入生词本不需要 Token。',
           cur
         );
         if (v != null) storeSet(TOKEN_KEY, v.trim());
@@ -2426,8 +2426,8 @@
       gmMenu('Sensebook：关于本地模式', () => {
         toast(
           (hasLlmConfig()
-            ? '本地优先：存词在本机；已配置 DeepSeek，AI 释义将直连模型'
-            : '默认本地优先：存词写入油猴存储。菜单「LLM 设置」填写 DeepSeek API Key 后可真实 AI 释义') +
+            ? '本地优先：加入生词本在本机；已配置 DeepSeek，AI 释义将直连模型'
+            : '默认本地优先：加入生词本写入油猴存储。菜单「LLM 设置」填写 DeepSeek API Key 后可真实 AI 释义') +
             ' · ' + getLocalDictStatusText() +
             '（dict version 与脚本 @version 独立）'
         );

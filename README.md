@@ -1,6 +1,6 @@
 # Sensebook
 
-浏览器优先的划词词汇工具（中文界面）。在任意网页划词 → 翻译 / 存词 / AI 释义。
+浏览器优先的划词词汇工具（中文界面）。在任意网页划词 → 翻译 / 加入生词本 / AI 释义。
 
 > **默认可不登录**：油猴脚本将词条保存在浏览器本地存储（`GM_setValue` / `localStorage`）。服务器与账号仅用于**可选**同步，不是 MVP 必需。
 
@@ -26,7 +26,7 @@ Chrome 138+ 需要单独打开油猴的用户脚本权限，否则脚本显示�
    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js  
    油猴会弹出安装页，确认安装即可。  
 3. 之后每次推送 `main` 前更新 `@version`，油猴会按 `@updateURL` 检查更新（也可在插件里手动「检查更新」）。v1 之前统一使用 `0.1.<时间>`，时间为 Asia/Shanghai 的 `YYYYMMDDHHmm`；每次推送只递增时间部分。
-4. 划词弹层点 **DeepSeek**，填 DeepSeek API Key；也可在页面右下角 **Sensebook** FAB 中选择「DeepSeek 设置」或「我的生词」。未配置时右下角显示「配置 DeepSeek」，首次自动弹出。
+4. 划词弹层点 **DeepSeek**，填 DeepSeek API Key；也可在页面右下角 **Sensebook** FAB 中选择「DeepSeek 设置」或「我的生词本」。未配置时右下角显示「配置 DeepSeek」，首次自动弹出。
 
 > **若右下角仍看不到 Sensebook 按钮**：打开浏览器控制台，看是否弹出 `Sensebook 脚本错误: …`（请把报错内容发出来）；并在 Tampermonkey/Violentmonkey 中确认该脚本已启用，且对当前网站没有被排除。也可在插件里对该脚本点「检查更新」。
 
@@ -39,9 +39,9 @@ Chrome 138+ 需要单独打开油猴的用户脚本权限，否则脚本显示�
 3. 打开任意网页划选单词：
    - **选中自动查询**（默认开）→ 短词先出「本地词库」释义，模型并行补第二行（「查询中…」）；整句仅模型。可在 LLM 设置或 FAB 中开关（键名 `sensebook_auto_query`）
    - **翻译** → 弹层结果区显示译文；命中本地缓存则即时回看，可再点翻译强制刷新
-   - **存词** → 写入本地生词本（键名 `sensebook_entries`），**无需 API / Token**
+   - **加入生词本** → 写入本地生词本（键名 `sensebook_entries`），**无需 API / Token**
    - **AI释义** → 已配置 DeepSeek Key 时直连生成真实释义；未配置时使用本地 stub；成功结果也会写入查询缓存
-4. 油猴菜单 / FAB：**「我的生词」**、**「查询记录」**（本地缓存 `sensebook_query_cache`，约 250 条 LRU）、**「LLM 设置」**。也可从划词弹层的 **DeepSeek** / **生词** 进入。
+4. 油猴菜单 / FAB：**「我的生词本」**、**「查询记录」**（本地缓存 `sensebook_query_cache`，约 250 条 LRU）、**「LLM 设置」**。也可从划词弹层的 **DeepSeek** / **我的生词本** 进入。
 
 本地模式说明也会在菜单「关于本地模式」中提示。登录相关菜单标注为 **「登录/同步（可选）」**。
 
@@ -81,7 +81,7 @@ AI 释义走油猴 **直连** DeepSeek 的 OpenAI 兼容接口（`GM_xmlhttpRequ
 4. 可选点 **测试连接**：向 `{base}/chat/completions` 发一条极小请求，面板内显示成功 / 鉴权失败 / 网络错误。
 5. **清除 Key** 只删 Key，保留 URL 与模型。
 
-未配置 Key 时 AI 释义仍走本地 stub，本地存词不受影响。配置好后划词点 **AI释义**，成功则 `status=ready`；失败保留词条且 `status=failed`。
+未配置 Key 时 AI 释义仍走本地 stub，本地加入生词本不受影响。配置好后划词点 **AI释义**，成功则 `status=ready`；失败保留词条且 `status=failed`。
 
 > **安全提醒**：API Key 只存在你本机的油猴/`GM_setValue` 中，请勿提交到仓库或发给他人。
 
@@ -117,7 +117,7 @@ curl http://127.0.0.1:8787/health
 - **登录/同步（可选）— API 地址** → 例如 `http://127.0.0.1:8787`
 - **登录/同步（可选）— Token** → 从词库页 Local Storage 复制 `sensebook_token`
 
-配置后，存词会在本地保存之外**额外**尝试同步到服务器。
+配置后，加入生词本会在本地保存之外**额外**尝试同步到服务器。
 
 也可临时用接口拿 Token：
 
@@ -132,8 +132,8 @@ curl -s -X POST http://127.0.0.1:8787/auth/login \
 ### A. 纯本地 MVP（推荐先测）
 
 1. 只安装用户脚本，**不要**配置 API / Token / LLM Key。
-2. 任意网页划词 → **存词** → toast 提示已本地存词。
-3. 菜单打开 **我的生词（本地）**，可见刚存的词条。
+2. 任意网页划词 → **加入生词本** → toast 提示已加入生词本。
+3. 菜单打开 **我的生词本（本地）**，可见刚存的词条。
 4. **AI释义**（无 Key）应写入 stub 句意/词义，`status` 为 `ready`。
 
 ### B. 真实 LLM（油猴直连 DeepSeek）
@@ -147,7 +147,7 @@ curl -s -X POST http://127.0.0.1:8787/auth/login \
 1. `npm run dev`，确认 `/health` 返回 `ok`（`llm` 字段表示是否配置了服务端 OPENAI_COMPATIBLE_*）。
 2. 打开 http://127.0.0.1:8787 注册并登录。
 3. 油猴配置可选 API + Token。
-4. 划词存词后，本地列表与服务器词库页均可看到（服务器路径仍需登录）。
+4. 划词加入生词本后，本地列表与服务器词库页均可看到（服务器路径仍需登录）。
 5. `POST /entries/:id/enrich` 与油猴直连使用同一套 JSON 字段：`ai_sentence_gloss` / `ai_word_sense`。
 
 ### 单元烟测（无需真实 Key）

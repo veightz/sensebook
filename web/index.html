@@ -166,7 +166,7 @@
 
     function renderEntryCards(entries, { local } = {}) {
       if (!entries.length) {
-        return '<div class="card muted">暂无词条。安装油猴脚本后划词「存词」即可（无需登录）。</div>';
+        return '<div class="card muted">暂无词条。安装油猴脚本后划词「加入生词本」即可（无需登录）。</div>';
       }
       return entries.map((e) => `
         <div class="card" data-id="${escapeHtml(e.id)}">

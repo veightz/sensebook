@@ -5,7 +5,7 @@
 | 模式 | 说明 |
 |------|------|
 | **本地优先（默认）** | 油猴脚本用 `GM_setValue` / `GM_getValue`（或 `localStorage` 回退）持久化，键名 **`sensebook_entries`**。**无需登录、无需 API。** |
-| **可选服务端** | 配置 API 地址 + JWT 后，存词可额外同步到 SQLite；鉴权 API 仍可用，但不是 MVP 必需。 |
+| **可选服务端** | 配置 API 地址 + JWT 后，加入生词本可额外同步到 SQLite；鉴权 API 仍可用，但不是 MVP 必需。 |
 
 本地与服务端词条字段对齐；本地条目无 `user_id`，`id` / `created_at` 由客户端生成。
 
@@ -37,7 +37,7 @@
 
 ## 状态流转
 
-1. 存词 → `status = pending_ai`（若同时做 AI 释义则可直接 `ready`）
+1. 加入生词本 → `status = pending_ai`（若同时做 AI 释义则可直接 `ready`）
 2. AI 释义成功（用户脚本直连 LLM、服务端 enrich，或无 Key 时 stub）→ `ready`（写入 gloss / sense）
 3. enrich 失败 → `failed`（保留词条；无 Key 时 stub 路径直接 `ready`）
 
