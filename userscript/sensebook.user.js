@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609170031
+// @version      0.1.202609170156
 // @description  划词自动查询 / 翻译 / 加入生词本 / 存本并释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -1458,6 +1458,33 @@
     );
   }
 
+  function truncateDisplay(s, maxLen) {
+    const str = String(s || '');
+    if (str.length <= maxLen) return str;
+    return str.slice(0, Math.max(0, maxLen - 1)) + '…';
+  }
+
+  function isSafeHttpUrl(url) {
+    try {
+      const u = new URL(String(url || ''), location.href);
+      return u.protocol === 'http:' || u.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }
+
+  /** Truncated source URL + 「打开来源」 link; empty string when missing/unsafe. */
+  function renderSourceUrlHtml(url) {
+    const raw = String(url || '').trim();
+    if (!raw || !isSafeHttpUrl(raw)) return '';
+    const href = escapeHtml(raw);
+    const display = escapeHtml(truncateDisplay(raw, 64));
+    return `<div style="font-size:11px;color:#94a3b8;margin-top:6px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+      <span style="word-break:break-all;min-width:0;flex:1;" title="${href}">${display}</span>
+      <a href="${href}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;text-decoration:none;white-space:nowrap;flex-shrink:0;">打开来源</a>
+    </div>`;
+  }
+
   function maskApiKey(key) {
     if (!key) return '未设置';
     if (key.length <= 8) return '已设置（••••）';
@@ -2142,7 +2169,7 @@
         <div style="font-size:14px;color:#0f172a;margin-bottom:12px;white-space:pre-wrap;">${escapeHtml(rec.translation || '（无）')}</div>
         ${rec.ai_word_sense ? `<div style="font-size:13px;color:#64748b;margin-bottom:4px;">词义</div><div style="font-size:14px;margin-bottom:12px;white-space:pre-wrap;">${escapeHtml(rec.ai_word_sense)}</div>` : ''}
         ${rec.ai_sentence_gloss ? `<div style="font-size:13px;color:#64748b;margin-bottom:4px;">句意</div><div style="font-size:14px;margin-bottom:12px;white-space:pre-wrap;">${escapeHtml(rec.ai_sentence_gloss)}</div>` : ''}
-        <div style="font-size:11px;color:#94a3b8;word-break:break-all;">${escapeHtml(rec.source_url || '')}</div>
+        ${renderSourceUrlHtml(rec.source_url)}
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
         <button type="button" data-act="save" style="min-height:44px;padding:10px 14px;border:none;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer;font-size:14px;">加入生词本</button>
@@ -2318,6 +2345,7 @@
           ${e.ai_word_sense ? `<div style="font-size:12px;color:#475569;margin-top:4px;"><strong>词义：</strong>${escapeHtml(e.ai_word_sense)}</div>` : ''}
           ${e.ai_sentence_gloss ? `<div style="font-size:12px;color:#475569;margin-top:4px;"><strong>句意：</strong>${escapeHtml(e.ai_sentence_gloss)}</div>` : ''}
           <div style="font-size:11px;color:#94a3b8;margin-top:8px;">${escapeHtml(e.created_at || '')}</div>
+          ${renderSourceUrlHtml(e.source_url)}
           <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
             <button type="button" data-enrich-local="${escapeHtml(e.id)}" style="min-height:36px;padding:6px 10px;border:none;border-radius:8px;background:#7c3aed;color:#fff;cursor:pointer;font-size:13px;">存本并释义</button>
             <button type="button" data-del-local="${escapeHtml(e.id)}" style="min-height:36px;padding:6px 10px;border:none;border-radius:8px;background:#dc2626;color:#fff;cursor:pointer;font-size:13px;">删除</button>
