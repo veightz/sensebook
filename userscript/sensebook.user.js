@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609162350
+// @version      0.1.202609170031
 // @description  划词自动查询 / 翻译 / 加入生词本 / 存本并释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -1248,9 +1248,10 @@
     if (!popup || !popupResultEl) return;
     const btnH = popupBtnRow ? popupBtnRow.offsetHeight : 0;
     const pad = 16; // popup padding + gaps
+    // Cap only to remaining viewport: no extra 220px lid, so longer 词义/句意
+    // do not internally scroll when the whole popup can still fit.
     const available = Math.max(72, vh - 2 * margin - btnH - pad);
-    const cap = Math.min(220, available);
-    popupResultEl.style.maxHeight = cap + 'px';
+    popupResultEl.style.maxHeight = available + 'px';
   }
 
   /**
@@ -1264,6 +1265,28 @@
     } catch {
       return 'ontouchstart' in window;
     }
+  }
+
+  /**
+   * Frozen pixel width for this popup show. Never mutate after shown — a
+   * widening card would slide toolbar hit targets (翻译 → 加入生词本).
+   *
+   * Mobile / coarse / small viewport (<640): min(100vw - 24px) — 12px gutters.
+   * Desktop / fine pointer: min(420px, 90vw) — readable, not full-bleed.
+   */
+  function _popupFrozenWidthPx(vw, coarse) {
+    const width = (vw == null)
+      ? (window.innerWidth || (document.documentElement && document.documentElement.clientWidth) || 360)
+      : vw;
+    const isCoarse = (coarse == null) ? _isCoarsePointer() : !!coarse;
+    const viewportCap = Math.max(200, width - 24); // 12px each side
+    const desktop = Math.min(420, Math.round(width * 0.90), viewportCap);
+    if (isCoarse || width < 640) {
+      // Phone-sized: use remaining viewport. Large coarse tablets still cap
+      // so landscape iPad is not a 90vw+ slab of 13px text.
+      return width < 640 ? viewportCap : desktop;
+    }
+    return desktop;
   }
 
   function repositionPopup(rect) {
@@ -1305,6 +1328,7 @@
     hidePopup();
     popup = document.createElement('div');
     popup.id = 'sensebook-popup';
+    const frozenW = _popupFrozenWidthPx();
     applyStyles(popup, {
       position: 'fixed',
       zIndex: '2147483646',
@@ -1313,9 +1337,9 @@
       alignItems: 'stretch',
       gap: '4px',
       padding: '6px',
-      width: 'max-content',
-      minWidth: '200px',
-      maxWidth: 'calc(100vw - 16px)',
+      width: frozenW + 'px',
+      minWidth: frozenW + 'px',
+      maxWidth: frozenW + 'px',
       boxSizing: 'border-box',
       background: '#fff',
       borderRadius: '10px',
@@ -1323,19 +1347,19 @@
       border: '1px solid #e2e8f0',
       fontFamily: 'system-ui,sans-serif',
     });
+    try { popup.dataset.frozenWidth = String(frozenW); } catch { /* ignore */ }
 
     popupBtnRow = document.createElement('div');
     popupBtnRow.setAttribute('data-sensebook-toolbar', '1');
     applyStyles(popupBtnRow, {
-      display: 'flex',
-      gap: '6px',
-      flexWrap: 'nowrap',
+      // Equal columns inside the already-frozen popup width. Do not use
+      // space-between on a growing card — that was the moving hit-target bug.
+      display: 'grid',
+      gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+      justifyItems: 'center',
       alignItems: 'center',
-      // Fixed gap (not space-between): spreading across a widening popup shifts
-      // hit targets so a rapid re-click on「翻译」can land on「加入生词本」.
-      justifyContent: 'flex-start',
-      width: 'max-content',
-      maxWidth: '100%',
+      gap: '4px',
+      width: '100%',
       boxSizing: 'border-box',
       order: '1',
     });
@@ -1417,12 +1441,7 @@
     resetPopupResultSlots();
     popup.appendChild(popupBtnRow);
     document.documentElement.appendChild(popup);
-    // Result starts hidden, so width is toolbar-driven. Lock a sensible min width
-    // so the result card has room once it appears.
-    try {
-      const w = Math.max(popup.offsetWidth || 0, 200);
-      if (w > 0) popup.style.width = w + 'px';
-    } catch { /* ignore */ }
+    // Width is already frozen to frozenW (px) before paint / first click.
     repositionPopup(rect);
   }
 
