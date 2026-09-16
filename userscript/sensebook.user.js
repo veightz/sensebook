@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609161628
+// @version      0.1.202609161649
 // @description  划词自动查询 / 翻译 / 加入生词本 / AI 释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -1018,6 +1018,7 @@
     };
 
     popupBtnRow.appendChild(mkBtn('翻译', () => doTranslate({ forceRefresh: true })));
+    popupBtnRow.appendChild(mkBtn('复制文本', () => copyLastSelectionText(), '#64748b'));
     popupBtnRow.appendChild(mkBtn('加入生词本', () => doSave(false)));
     popupBtnRow.appendChild(mkBtn('AI释义', () => doSave(true), '#7c3aed'));
     popupBtnRow.appendChild(mkBtn('我的生词本', () => { hidePopup(); showLocalPanel(); }, '#0f766e'));
@@ -2786,7 +2787,6 @@
     };
 
     let autoQueryChip = null;
-    fabSheet.appendChild(makeAction('复制文本', copyLastSelectionText));
     fabSheet.appendChild(makeAction('DeepSeek 设置', showLlmSettingsPanel));
     fabSheet.appendChild(makeAction('我的生词本', showLocalPanel));
     fabSheet.appendChild(makeAction('查询记录', () => showQueryHistoryPanel()));
