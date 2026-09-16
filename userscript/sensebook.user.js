@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609161539
+// @version      0.1.202609161554
 // @description  划词自动查询 / 翻译 / 加入生词本 / AI 释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -64,12 +64,111 @@
   }
 
   let sensebookErrorAlerted = false;
-  function sensebookAlertError(err) {
+
+  /** Prefer own enumerable keys without throwing on null/undefined. */
+  function safeKeys(obj) {
+    if (obj == null) return [];
+    try {
+      return Object.keys(obj);
+    } catch {
+      const out = [];
+      try {
+        for (const k in obj) {
+          if (Object.prototype.hasOwnProperty.call(obj, k)) out.push(k);
+        }
+      } catch { /* ignore */ }
+      return out;
+    }
+  }
+
+  /**
+   * Set inline styles without Object.assign(target) — page context may poison
+   * Object.assign or leave el.style null; never throw "Cannot convert undefined or null to object".
+   */
+  function applyStyles(el, styles) {
+    if (!el || !styles || typeof styles !== 'object') return;
+    const keys = safeKeys(styles);
+    const st = el.style;
+    if (st != null) {
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        try {
+          st[k] = styles[k];
+        } catch { /* ignore individual prop */ }
+      }
+      return;
+    }
+    // Rare: el.style missing (poisoned createElement) — CSS text attribute fallback
+    try {
+      const parts = [];
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        const cssKey = String(k).replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
+        parts.push(cssKey + ':' + styles[k]);
+      }
+      if (!parts.length || typeof el.setAttribute !== 'function') return;
+      const prev = (typeof el.getAttribute === 'function' && el.getAttribute('style')) || '';
+      el.setAttribute('style', (prev ? prev + ';' : '') + parts.join(';'));
+    } catch { /* ignore */ }
+  }
+
+  function setStyleProp(el, key, val) {
+    if (!el) return;
+    try {
+      if (el.style != null) {
+        el.style[key] = val;
+        return;
+      }
+    } catch { /* fall through */ }
+    const o = {};
+    o[key] = val;
+    applyStyles(el, o);
+  }
+
+  function getStyleProp(el, key) {
+    if (!el) return '';
+    try {
+      if (el.style != null && el.style[key] != null) return el.style[key];
+    } catch { /* ignore */ }
+    try {
+      const raw = typeof el.getAttribute === 'function' ? el.getAttribute('style') : '';
+      if (!raw) return '';
+      const cssKey = String(key).replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
+      const re = new RegExp('(?:^|;)\\s*' + cssKey.replace(/-/g, '\\-') + '\\s*:\\s*([^;]+)', 'i');
+      const m = String(raw).match(re);
+      return m ? m[1].trim() : '';
+    } catch {
+      return '';
+    }
+  }
+
+  function sensebookAlertError(err, where) {
     try {
       if (sensebookErrorAlerted) return;
       sensebookErrorAlerted = true;
       const msg = (err && err.message) ? err.message : String(err);
-      alert('Sensebook 脚本错误: ' + msg);
+      let loc = where ? String(where) : '';
+      if (!loc) {
+        try {
+          const stack = (err && err.stack) ? String(err.stack) : '';
+          const lines = stack.split('\n').map((l) => l.trim()).filter(Boolean);
+          // skip the TypeError line itself; find first sensebook-ish or function frame
+          for (let i = 1; i < lines.length; i++) {
+            const line = lines[i];
+            const m =
+              line.match(/at\s+(?:async\s+)?([\w$.<]+)/) ||
+              line.match(/([\w$.]+)\s*@/);
+            if (m && m[1] && m[1] !== 'Object' && m[1] !== 'Array') {
+              loc = m[1];
+              break;
+            }
+          }
+          if (!loc && lines[1]) loc = lines[1].slice(0, 80);
+        } catch { /* ignore */ }
+      }
+      const detail = loc ? (msg + ' @' + loc) : msg;
+      alert('Sensebook 脚本错误: ' + detail);
+      try { console.error('[Sensebook]', detail, err); } catch { /* ignore */ }
     } catch { /* ignore */ }
   }
 
@@ -78,7 +177,7 @@
       if (document.getElementById('sensebook-fab-root')) return;
       const root = document.createElement('div');
       root.id = 'sensebook-fab-root';
-      Object.assign(root.style, {
+      applyStyles(root, {
         position: 'fixed',
         right: '16px',
         bottom: '16px',
@@ -87,7 +186,7 @@
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.textContent = 'Sensebook 设置';
-      Object.assign(btn.style, {
+      applyStyles(btn, {
         minWidth: '120px',
         minHeight: '48px',
         padding: '12px 16px',
@@ -150,10 +249,28 @@
     '不要输出 Markdown 或其它文字。';
 
   // ---- storage helpers (safe gmGet/gmSet + localStorage fallback) ----
+  function coerceStoreValue(v) {
+    // GM backends sometimes return JSON strings for objects we stored as objects.
+    if (typeof v === 'string') {
+      const s = v.trim();
+      if (
+        (s.startsWith('{') && s.endsWith('}')) ||
+        (s.startsWith('[') && s.endsWith(']')) ||
+        s === 'null' ||
+        s === 'true' ||
+        s === 'false' ||
+        /^-?\d+(\.\d+)?$/.test(s)
+      ) {
+        try { return JSON.parse(s); } catch { return v; }
+      }
+    }
+    return v;
+  }
+
   function storeGet(key, def) {
     try {
       const v = gmGet(key, undefined);
-      if (v !== undefined && v !== null) return v;
+      if (v !== undefined && v !== null) return coerceStoreValue(v);
     } catch { /* ignore */ }
     try {
       const raw = localStorage.getItem(key);
@@ -296,10 +413,16 @@
 
   function persistDictToStore(payload) {
     // Store full payload under DATA key; META only tracks dict.version (NOT script @version).
+    if (!payload || typeof payload !== 'object') return;
+    const entries = payload.entries;
+    let count = typeof payload.count === 'number' ? payload.count : 0;
+    if (!count && entries && typeof entries === 'object') {
+      count = safeKeys(entries).length;
+    }
     storeSet(LOCAL_DICT_DATA_KEY, payload);
     storeSet(LOCAL_DICT_META_KEY, {
       dictVersion: payload.version || '',
-      count: payload.count || (payload.entries ? Object.keys(payload.entries).length : 0),
+      count,
       fetchedAt: Date.now(),
       source: payload.source || '',
     });
@@ -389,7 +512,8 @@
   }
 
   function getLocalDictStatusText() {
-    const meta = storeGet(LOCAL_DICT_META_KEY, null) || {};
+    let meta = storeGet(LOCAL_DICT_META_KEY, null);
+    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) meta = {};
     const ver = (localDictMem && localDictMem.version) || meta.dictVersion || '未加载';
     const n = (localDictMem && localDictMem.count) || meta.count || 0;
     return '词库 ' + ver + (n ? ' · ' + n + ' 词' : '');
@@ -603,7 +727,7 @@
     if (!el) {
       el = document.createElement('div');
       el.id = 'sensebook-toast';
-      Object.assign(el.style, {
+      applyStyles(el, {
         position: 'fixed',
         bottom: '24px',
         left: '50%',
@@ -620,16 +744,16 @@
       (document.body || document.documentElement).appendChild(el);
     }
     el.textContent = msg;
-    el.style.display = 'block';
+    setStyleProp(el, 'display', 'block');
     clearTimeout(el._t);
-    el._t = setTimeout(() => { el.style.display = 'none'; }, 3200);
+    el._t = setTimeout(() => { setStyleProp(el, 'display', 'none'); }, 3200);
   }
 
   // Early FAB boot (function decls for setupFab* are hoisted; menus come later)
   try {
     setupFabAndOnboarding();
   } catch (err) {
-    sensebookAlertError(err);
+    sensebookAlertError(err, 'early-boot/setupFabAndOnboarding');
     mountEmergencyFab();
   }
 
@@ -676,7 +800,7 @@
     if (popupResultEl && popup.contains(popupResultEl)) return popupResultEl;
     const el = document.createElement('div');
     el.setAttribute('data-sensebook-result', '1');
-    Object.assign(el.style, {
+    applyStyles(el, {
       display: 'none',
       width: '100%',
       marginTop: '4px',
@@ -725,7 +849,7 @@
 
   function _paintMetaHint(parent, label, dotColor) {
     const meta = document.createElement('div');
-    Object.assign(meta.style, {
+    applyStyles(meta, {
       display: 'flex',
       alignItems: 'center',
       gap: '4px',
@@ -736,7 +860,7 @@
       marginBottom: '4px',
     });
     const dot = document.createElement('span');
-    Object.assign(dot.style, {
+    applyStyles(dot, {
       width: '6px',
       height: '6px',
       borderRadius: '50%',
@@ -765,14 +889,14 @@
     }
     el.style.display = 'block';
     localRow.style.display = 'block';
-    Object.assign(localRow.style, {
+    applyStyles(localRow, {
       marginBottom: '8px',
       paddingBottom: '8px',
       borderBottom: '1px solid #e2e8f0',
     });
     _paintMetaHint(localRow, '本地词库', '#38bdf8');
     const text = document.createElement('div');
-    Object.assign(text.style, {
+    applyStyles(text, {
       color: '#0f172a',
       whiteSpace: 'pre-wrap',
       wordBreak: 'break-word',
@@ -801,7 +925,7 @@
     }
 
     const text = document.createElement('div');
-    Object.assign(text.style, {
+    applyStyles(text, {
       whiteSpace: 'pre-wrap',
       wordBreak: 'break-word',
     });
@@ -844,7 +968,7 @@
     hidePopup();
     popup = document.createElement('div');
     popup.id = 'sensebook-popup';
-    Object.assign(popup.style, {
+    applyStyles(popup, {
       position: 'fixed',
       zIndex: '2147483646',
       display: 'flex',
@@ -861,7 +985,7 @@
     });
 
     popupBtnRow = document.createElement('div');
-    Object.assign(popupBtnRow.style, {
+    applyStyles(popupBtnRow, {
       display: 'flex',
       gap: '6px',
       flexWrap: 'wrap',
@@ -871,7 +995,7 @@
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = label;
-      Object.assign(b.style, {
+      applyStyles(b, {
         minHeight: '44px',
         minWidth: '64px',
         padding: '8px 12px',
@@ -942,7 +1066,7 @@
 
     const host = document.createElement('div');
     host.id = 'sensebook-llm-settings-host';
-    Object.assign(host.style, {
+    applyStyles(host, {
       position: 'fixed',
       inset: '0',
       zIndex: '2147483647',
@@ -1239,7 +1363,7 @@
     }
     panel = document.createElement('div');
     panel.id = 'sensebook-panel';
-    Object.assign(panel.style, {
+    applyStyles(panel, {
       position: 'fixed',
       top: '0',
       right: '0',
@@ -1255,7 +1379,7 @@
     });
 
     const header = document.createElement('div');
-    Object.assign(header.style, {
+    applyStyles(header, {
       padding: '14px 16px',
       borderBottom: '1px solid #e2e8f0',
       background: '#fff',
@@ -1272,7 +1396,7 @@
     </div>`;
 
     const toolbar = document.createElement('div');
-    Object.assign(toolbar.style, {
+    applyStyles(toolbar, {
       display: 'flex',
       gap: '6px',
       flexWrap: 'wrap',
@@ -1282,7 +1406,7 @@
     search.type = 'search';
     search.placeholder = '按单词过滤…';
     search.value = filterText || '';
-    Object.assign(search.style, {
+    applyStyles(search, {
       flex: '1',
       minWidth: '120px',
       minHeight: '40px',
@@ -1295,7 +1419,7 @@
     const goBtn = document.createElement('button');
     goBtn.type = 'button';
     goBtn.textContent = '搜索';
-    Object.assign(goBtn.style, {
+    applyStyles(goBtn, {
       minHeight: '40px',
       padding: '8px 12px',
       border: 'none',
@@ -1313,7 +1437,7 @@
     const vocabBtn = document.createElement('button');
     vocabBtn.type = 'button';
     vocabBtn.textContent = '我的生词本';
-    Object.assign(vocabBtn.style, {
+    applyStyles(vocabBtn, {
       minHeight: '40px',
       padding: '8px 10px',
       border: 'none',
@@ -1328,7 +1452,7 @@
     const closeBtn = document.createElement('button');
     closeBtn.type = 'button';
     closeBtn.textContent = '关闭';
-    Object.assign(closeBtn.style, {
+    applyStyles(closeBtn, {
       minHeight: '40px',
       padding: '8px 12px',
       border: 'none',
@@ -1348,7 +1472,7 @@
     panel.appendChild(header);
 
     const body = document.createElement('div');
-    Object.assign(body.style, {
+    applyStyles(body, {
       overflow: 'auto',
       padding: '12px',
       flex: '1',
@@ -1387,7 +1511,7 @@
     hidePanel();
     panel = document.createElement('div');
     panel.id = 'sensebook-panel';
-    Object.assign(panel.style, {
+    applyStyles(panel, {
       position: 'fixed',
       top: '0',
       right: '0',
@@ -1403,7 +1527,7 @@
     });
 
     const header = document.createElement('div');
-    Object.assign(header.style, {
+    applyStyles(header, {
       padding: '14px 16px',
       borderBottom: '1px solid #e2e8f0',
       background: '#fff',
@@ -1420,7 +1544,7 @@
     const backBtn = document.createElement('button');
     backBtn.type = 'button';
     backBtn.textContent = '返回';
-    Object.assign(backBtn.style, {
+    applyStyles(backBtn, {
       minHeight: '40px',
       padding: '8px 12px',
       border: 'none',
@@ -1435,7 +1559,7 @@
     panel.appendChild(header);
 
     const body = document.createElement('div');
-    Object.assign(body.style, { overflow: 'auto', padding: '12px', flex: '1' });
+    applyStyles(body, { overflow: 'auto', padding: '12px', flex: '1' });
     body.innerHTML = `
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px;">
         <div style="font-size:13px;color:#64748b;margin-bottom:4px;">句子</div>
@@ -1506,7 +1630,7 @@
     const entries = loadEntries();
     panel = document.createElement('div');
     panel.id = 'sensebook-panel';
-    Object.assign(panel.style, {
+    applyStyles(panel, {
       position: 'fixed',
       top: '0',
       right: '0',
@@ -1522,7 +1646,7 @@
     });
 
     const header = document.createElement('div');
-    Object.assign(header.style, {
+    applyStyles(header, {
       padding: '14px 16px',
       borderBottom: '1px solid #e2e8f0',
       background: '#fff',
@@ -1538,7 +1662,7 @@
       <div style="font-size:12px;color:#64748b;margin-top:2px;">无需登录 · ${llmHint} · 共 ${entries.length} 条</div>
     </div>`;
     const headerActions = document.createElement('div');
-    Object.assign(headerActions.style, {
+    applyStyles(headerActions, {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'flex-end',
@@ -1549,7 +1673,7 @@
     const configBtn = document.createElement('button');
     configBtn.type = 'button';
     configBtn.textContent = '配置 DeepSeek';
-    Object.assign(configBtn.style, {
+    applyStyles(configBtn, {
       minHeight: '40px',
       padding: '8px 10px',
       border: 'none',
@@ -1567,7 +1691,7 @@
     const histBtn = document.createElement('button');
     histBtn.type = 'button';
     histBtn.textContent = '查询记录';
-    Object.assign(histBtn.style, {
+    applyStyles(histBtn, {
       minHeight: '40px',
       padding: '8px 10px',
       border: 'none',
@@ -1585,7 +1709,7 @@
     const closeBtn = document.createElement('button');
     closeBtn.type = 'button';
     closeBtn.textContent = '关闭';
-    Object.assign(closeBtn.style, {
+    applyStyles(closeBtn, {
       minHeight: '40px',
       padding: '8px 12px',
       border: 'none',
@@ -1602,7 +1726,7 @@
     panel.appendChild(header);
 
     const body = document.createElement('div');
-    Object.assign(body.style, {
+    applyStyles(body, {
       overflow: 'auto',
       padding: '12px',
       flex: '1',
@@ -2248,7 +2372,7 @@
       const ta = document.createElement('textarea');
       ta.value = text;
       ta.setAttribute('readonly', '');
-      Object.assign(ta.style, {
+      applyStyles(ta, {
         position: 'fixed',
         left: '-9999px',
         top: '0',
@@ -2333,12 +2457,12 @@
   }
 
   function isFabSheetOpen() {
-    return !!(fabSheet && fabSheet.style.display !== 'none');
+    return !!(fabSheet && getStyleProp(fabSheet, 'display') !== 'none');
   }
 
   function hideFabSheet() {
     if (fabSheet) {
-      fabSheet.style.display = 'none';
+      setStyleProp(fabSheet, 'display', 'none');
       if (fabButton) fabButton.setAttribute('aria-expanded', 'false');
     }
   }
@@ -2346,7 +2470,9 @@
   /** Place compact sheet upward/inward so it never covers the FAB drag target. */
   function positionFabSheet() {
     if (!fabSheet || !fabRoot || !fabButton) return;
-    const btn = fabButton.getBoundingClientRect();
+    let btn;
+    try { btn = fabButton.getBoundingClientRect(); } catch { return; }
+    if (!btn) return;
     const sheetW = fabSheet.offsetWidth || 120;
     const sheetH = fabSheet.offsetHeight || 120;
     const gap = 6;
@@ -2355,31 +2481,37 @@
     const spaceAbove = btn.top - margin;
     const spaceBelow = window.innerHeight - btn.bottom - margin;
     const openUp = spaceAbove >= sheetH + gap || spaceAbove >= spaceBelow;
-    fabSheet.style.left = 'auto';
-    fabSheet.style.right = '0';
     if (openUp) {
-      fabSheet.style.top = 'auto';
-      fabSheet.style.bottom = (btn.height + gap) + 'px';
+      applyStyles(fabSheet, {
+        left: 'auto',
+        right: '0',
+        top: 'auto',
+        bottom: (btn.height + gap) + 'px',
+      });
     } else {
-      fabSheet.style.bottom = 'auto';
-      fabSheet.style.top = (btn.height + gap) + 'px';
+      applyStyles(fabSheet, {
+        left: 'auto',
+        right: '0',
+        bottom: 'auto',
+        top: (btn.height + gap) + 'px',
+      });
     }
     // Keep sheet inward (toward viewport center) when near left edge
     const spaceRight = window.innerWidth - btn.right - margin;
     if (btn.left + btn.width < sheetW && spaceRight < sheetW) {
       // near left: align sheet's left to FAB left via left:0
-      fabSheet.style.right = 'auto';
-      fabSheet.style.left = '0';
+      setStyleProp(fabSheet, 'right', 'auto');
+      setStyleProp(fabSheet, 'left', '0');
     } else {
-      fabSheet.style.left = 'auto';
-      fabSheet.style.right = '0';
+      setStyleProp(fabSheet, 'left', 'auto');
+      setStyleProp(fabSheet, 'right', '0');
     }
   }
 
   function openFabSheet() {
     if (!fabSheet || !fabButton) return;
     if (fabDragging || Date.now() < fabDragSuppressUntil) return;
-    fabSheet.style.display = 'flex';
+    setStyleProp(fabSheet, 'display', 'flex');
     positionFabSheet();
     fabButton.setAttribute('aria-expanded', 'true');
   }
@@ -2408,10 +2540,12 @@
   function applyFabPosition(left, top) {
     if (!fabRoot) return;
     const pos = clampFabPosition(left, top);
-    fabRoot.style.left = pos.left + 'px';
-    fabRoot.style.top = pos.top + 'px';
-    fabRoot.style.right = 'auto';
-    fabRoot.style.bottom = 'auto';
+    applyStyles(fabRoot, {
+      left: pos.left + 'px',
+      top: pos.top + 'px',
+      right: 'auto',
+      bottom: 'auto',
+    });
     if (isFabSheetOpen()) positionFabSheet();
     return pos;
   }
@@ -2424,15 +2558,33 @@
     };
   }
 
+  function normalizeFabPos(raw) {
+    if (raw == null) return null;
+    let v = raw;
+    if (typeof v === 'string') {
+      try { v = JSON.parse(v); } catch { return null; }
+    }
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+    const left = Number(v.left);
+    const top = Number(v.top);
+    if (!Number.isFinite(left) || !Number.isFinite(top)) return null;
+    return { left, top };
+  }
+
   function loadAndApplyFabPosition() {
     if (!fabRoot) return;
     let saved = null;
     try {
-      saved = storeGet(FAB_POS_KEY, null);
+      saved = normalizeFabPos(storeGet(FAB_POS_KEY, null));
     } catch { /* ignore */ }
-    if (saved && typeof saved === 'object' && Number.isFinite(saved.left) && Number.isFinite(saved.top)) {
+    if (saved) {
       applyFabPosition(saved.left, saved.top);
     } else {
+      // Drop corrupt / legacy values so later reads stay clean
+      try {
+        const raw = storeGet(FAB_POS_KEY, null);
+        if (raw != null && !normalizeFabPos(raw)) storeSet(FAB_POS_KEY, null);
+      } catch { /* ignore */ }
       const d = defaultFabPosition();
       applyFabPosition(d.left, d.top);
     }
@@ -2440,8 +2592,15 @@
 
   function persistFabPosition() {
     if (!fabRoot) return;
-    const rect = fabRoot.getBoundingClientRect();
+    let rect;
+    try {
+      rect = fabRoot.getBoundingClientRect();
+    } catch {
+      return;
+    }
+    if (!rect) return;
     const pos = applyFabPosition(rect.left, rect.top);
+    if (!pos || !Number.isFinite(pos.left) || !Number.isFinite(pos.top)) return;
     storeSet(FAB_POS_KEY, { left: pos.left, top: pos.top });
   }
 
@@ -2467,7 +2626,7 @@
           moved = true;
           fabDragging = true;
           hideFabSheet();
-          fabButton.style.cursor = 'grabbing';
+          setStyleProp(fabButton, 'cursor', 'grabbing');
         }
         if (moved) {
           applyFabPosition(origLeft + dx, origTop + dy);
@@ -2479,7 +2638,7 @@
         fabButton.removeEventListener('pointermove', onMove);
         fabButton.removeEventListener('pointerup', onUp);
         fabButton.removeEventListener('pointercancel', onUp);
-        fabButton.style.cursor = 'grab';
+        setStyleProp(fabButton, 'cursor', 'grab');
         if (moved) {
           persistFabPosition();
           fabDragSuppressUntil = Date.now() + 350;
@@ -2502,7 +2661,7 @@
     if (fabRoot && document.getElementById('sensebook-fab-root')) return;
     fabRoot = document.createElement('div');
     fabRoot.id = 'sensebook-fab-root';
-    Object.assign(fabRoot.style, {
+    applyStyles(fabRoot, {
       position: 'fixed',
       zIndex: '2147483647',
       display: 'block',
@@ -2514,7 +2673,7 @@
 
     fabSheet = document.createElement('div');
     fabSheet.id = 'sensebook-fab-sheet';
-    Object.assign(fabSheet.style, {
+    applyStyles(fabSheet, {
       display: 'none',
       position: 'absolute',
       zIndex: '1',
@@ -2535,7 +2694,7 @@
       const button = document.createElement('button');
       button.type = 'button';
       button.textContent = label;
-      Object.assign(button.style, {
+      applyStyles(button, {
         display: 'block',
         minHeight: '22px',
         width: '100%',
@@ -2589,7 +2748,7 @@
     fabButton.type = 'button';
     fabButton.setAttribute('data-sensebook-fab', 'true');
     fabButton.setAttribute('aria-expanded', 'false');
-    Object.assign(fabButton.style, {
+    applyStyles(fabButton, {
       position: 'relative',
       zIndex: '2',
       minWidth: '72px',
@@ -2665,7 +2824,7 @@
     if (!fabButton) return;
     const configured = hasLlmConfig();
     fabButton.textContent = configured ? 'Sensebook' : '配置 DeepSeek';
-    fabButton.style.background = configured ? '#0f172a' : '#7c3aed';
+    setStyleProp(fabButton, 'background', configured ? '#0f172a' : '#7c3aed');
     fabButton.setAttribute(
       'aria-label',
       configured ? '打开 Sensebook 快捷菜单' : '配置 DeepSeek API Key'
@@ -2675,7 +2834,7 @@
 
   document.addEventListener('mousedown', (e) => {
     if (llmPanelHost && eventInsideLlmSettings(e)) return;
-    if (fabSheet && fabSheet.style.display !== 'none' && fabRoot && !fabRoot.contains(e.target)) {
+    if (fabSheet && getStyleProp(fabSheet, 'display') !== 'none' && fabRoot && !fabRoot.contains(e.target)) {
       hideFabSheet();
     }
   });
@@ -2684,7 +2843,7 @@
     try {
       setupFab();
     } catch (err) {
-      sensebookAlertError(err);
+      sensebookAlertError(err, 'setupFabAndOnboarding/setupFab');
       mountEmergencyFab();
       return;
     }
@@ -2697,7 +2856,7 @@
           showLlmSettingsPanel();
           toast('请配置 DeepSeek API Key');
         } catch (err) {
-          sensebookAlertError(err);
+          sensebookAlertError(err, 'onboarding/showLlmSettingsPanel');
         }
       }, 600);
     }
@@ -2772,7 +2931,7 @@
         setupFab();
       }
     } catch (err) {
-      sensebookAlertError(err);
+      sensebookAlertError(err, 'ensureFabAttached/setupFab');
       mountEmergencyFab();
     }
   }
@@ -2788,7 +2947,7 @@
           fabSheet = null;
           fabButton = null;
           try { setupFab(); } catch (err) {
-            sensebookAlertError(err);
+            sensebookAlertError(err, 'fabWatchdog/setupFab');
             mountEmergencyFab();
           }
         }
@@ -2817,7 +2976,7 @@
   } catch { /* ignore */ }
 
   } catch (err) { // sensebook-main
-    sensebookAlertError(err);
+    sensebookAlertError(err, 'sensebook-main');
     mountEmergencyFab();
   }
 
