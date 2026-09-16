@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609162151
+// @version      0.1.202609162157
 // @description  划词自动查询 / 翻译 / 加入生词本 / 存本并释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -733,6 +733,11 @@
   let fabDragSuppressUntil = 0;
   let fabHoverCloseTimer = null;
   const FAB_HOVER_CLOSE_DELAY_MS = 200;
+  /** Authoritative sheet open flag (display can lag / be raced by events). */
+  let fabSheetOpen = false;
+  /** Ignore duplicate pointerup+click (or double-fire) within one gesture. */
+  let fabToggleSuppressUntil = 0;
+  const FAB_TOGGLE_SUPPRESS_MS = 480;
   let onboardingScheduled = false;
 
   function eventInsideLlmSettings(e) {
@@ -2909,8 +2914,8 @@
   }
 
   function getFabSize() {
-    let w = 96;
-    let h = 40;
+    let w = 60;
+    let h = 30;
     // Measure the FAB button only — never the expanded sheet (sheet is out-of-flow)
     if (fabButton) {
       const rect = fabButton.getBoundingClientRect();
@@ -2924,7 +2929,7 @@
   }
 
   function isFabSheetOpen() {
-    return !!(fabSheet && getStyleProp(fabSheet, 'display') !== 'none');
+    return !!(fabSheetOpen && fabSheet && getStyleProp(fabSheet, 'display') !== 'none');
   }
 
   function clearFabHoverCloseTimer() {
@@ -2945,6 +2950,7 @@
 
   function hideFabSheet() {
     clearFabHoverCloseTimer();
+    fabSheetOpen = false;
     if (fabSheet) {
       setStyleProp(fabSheet, 'display', 'none');
       if (fabButton) fabButton.setAttribute('aria-expanded', 'false');
@@ -3026,13 +3032,19 @@
     if (!fabSheet || !fabButton) return;
     if (fabDragging || Date.now() < fabDragSuppressUntil) return;
     clearFabHoverCloseTimer();
+    fabSheetOpen = true;
     setStyleProp(fabSheet, 'display', 'flex');
     positionFabSheet();
     fabButton.setAttribute('aria-expanded', 'true');
   }
 
   function toggleFabSheet() {
-    if (isFabSheetOpen()) hideFabSheet();
+    // Idempotent within one gesture: mobile often fires pointerup then click.
+    if (Date.now() < fabToggleSuppressUntil) return;
+    if (fabDragging || Date.now() < fabDragSuppressUntil) return;
+    fabToggleSuppressUntil = Date.now() + FAB_TOGGLE_SUPPRESS_MS;
+    const openNow = fabSheetOpen || !!(fabSheet && getStyleProp(fabSheet, 'display') !== 'none');
+    if (openNow) hideFabSheet();
     else openFabSheet();
   }
 
@@ -3124,8 +3136,9 @@
     const THRESH = 6;
     fabButton.addEventListener('pointerdown', (e) => {
       if (e.button != null && e.button !== 0) return;
-      // Drag handle is the FAB itself only — collapse menu so sheet cannot steal moves
-      hideFabSheet();
+      // Do NOT hideFabSheet here: that races the following click/pointerup toggle
+      // (hide → click opens again = flash-reopen on mobile). Collapse only once
+      // drag starts so the sheet cannot steal moves.
       const rect = fabRoot.getBoundingClientRect();
       const startX = e.clientX;
       const startY = e.clientY;
@@ -3140,7 +3153,10 @@
         if (!moved && (Math.abs(dx) > THRESH || Math.abs(dy) > THRESH)) {
           moved = true;
           fabDragging = true;
+          // Collapse while dragging (keep sheet off the drag target)
           hideFabSheet();
+          // Swallow any trailing click from this gesture
+          fabToggleSuppressUntil = Date.now() + FAB_TOGGLE_SUPPRESS_MS;
           setStyleProp(fabButton, 'cursor', 'grabbing');
         }
         if (moved) {
@@ -3148,11 +3164,11 @@
         }
       };
 
-      const onUp = (ev) => {
+      const endGesture = (ev, cancelled) => {
         try { fabButton.releasePointerCapture(ev.pointerId); } catch { /* ignore */ }
         fabButton.removeEventListener('pointermove', onMove);
-        fabButton.removeEventListener('pointerup', onUp);
-        fabButton.removeEventListener('pointercancel', onUp);
+        fabButton.removeEventListener('pointerup', onPointerUp);
+        fabButton.removeEventListener('pointercancel', onPointerCancel);
         setStyleProp(fabButton, 'cursor', 'grab');
         if (moved) {
           persistFabPosition();
@@ -3160,14 +3176,25 @@
           fabDragging = false;
           hideFabSheet();
           try { ev.preventDefault(); } catch { /* ignore */ }
+          return;
+        }
+        fabDragging = false;
+        if (cancelled) return;
+        // Light tap: toggle once here; suppress the synthetic click that follows
+        // on Android Chrome (pointerup + click would otherwise double-toggle).
+        if (!hasLlmConfig()) {
+          fabToggleSuppressUntil = Date.now() + FAB_TOGGLE_SUPPRESS_MS;
+          showLlmSettingsPanel();
         } else {
-          fabDragging = false;
+          toggleFabSheet();
         }
       };
+      const onPointerUp = (ev) => endGesture(ev, false);
+      const onPointerCancel = (ev) => endGesture(ev, true);
 
       fabButton.addEventListener('pointermove', onMove);
-      fabButton.addEventListener('pointerup', onUp);
-      fabButton.addEventListener('pointercancel', onUp);
+      fabButton.addEventListener('pointerup', onPointerUp);
+      fabButton.addEventListener('pointercancel', onPointerCancel);
     });
   }
 
@@ -3276,21 +3303,21 @@
     applyStyles(fabButton, {
       position: 'relative',
       zIndex: '2',
-      minWidth: '72px',
-      minHeight: '36px',
-      padding: '6px 12px',
+      minWidth: '60px',
+      minHeight: '30px',
+      padding: '4px 10px',
       border: '2px solid #fff',
       borderRadius: '999px',
       background: '#7c3aed',
       color: '#fff',
-      boxShadow: '0 4px 14px rgba(124,58,237,.45), 0 1px 4px rgba(0,0,0,.2)',
-      fontSize: '12px',
+      boxShadow: '0 3px 10px rgba(124,58,237,.4), 0 1px 3px rgba(0,0,0,.18)',
+      fontSize: '11px',
       fontWeight: '700',
       letterSpacing: '0.02em',
       cursor: 'grab',
       touchAction: 'none',
       userSelect: 'none',
-      lineHeight: '1.2',
+      lineHeight: '1.15',
     });
 
     // Hover-to-expand only on clearly-identified desktop OS + fine pointer.
@@ -3319,11 +3346,14 @@
       event.preventDefault();
       event.stopPropagation();
       if (fabDragging || Date.now() < fabDragSuppressUntil) return;
+      // pointerup already toggled on the same gesture → suppress window makes this a no-op.
+      // Kept for keyboard / click-only environments that do not emit our pointerup path.
       if (!hasLlmConfig()) {
+        if (Date.now() < fabToggleSuppressUntil) return;
+        fabToggleSuppressUntil = Date.now() + FAB_TOGGLE_SUPPRESS_MS;
         showLlmSettingsPanel();
         return;
       }
-      // Light tap / click toggles menu (primary on touch & non-desktop OS).
       toggleFabSheet();
     });
     updateFabState();
@@ -3460,7 +3490,9 @@
       if (!document.getElementById('sensebook-fab-root')) {
         fabRoot = null;
         fabSheet = null;
+        fabHoverBridge = null;
         fabButton = null;
+        fabSheetOpen = false;
         setupFab();
       }
     } catch (err) {
@@ -3478,7 +3510,9 @@
         if (!document.getElementById('sensebook-fab-root')) {
           fabRoot = null;
           fabSheet = null;
+          fabHoverBridge = null;
           fabButton = null;
+          fabSheetOpen = false;
           try { setupFab(); } catch (err) {
             sensebookAlertError(err, 'fabWatchdog/setupFab');
             mountEmergencyFab();
