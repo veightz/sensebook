@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609162057
+// @version      0.1.202609162100
 // @description  划词自动查询 / 翻译 / 加入生词本 / 存本并释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -218,6 +218,7 @@
   const LLM_BASE_URL_KEY = 'sensebook_llm_base_url';
   const LLM_API_KEY_KEY = 'sensebook_llm_api_key';
   const LLM_MODEL_KEY = 'sensebook_llm_model';
+  const LLM_THINKING_KEY = 'sensebook_llm_thinking';
   const ONBOARDING_DONE_KEY = 'sensebook_onboarding_done';
   const FAB_POS_KEY = 'sensebook_fab_pos';
   const AUTO_QUERY_KEY = 'sensebook_auto_query';
@@ -318,6 +319,23 @@
   /** True when user configured an API key (base URL has a usable default). */
   function hasLlmConfig() {
     return !!getLlmApiKey();
+  }
+
+  /** DeepSeek-style thinking for chat/completions; default OFF (speed/cost). */
+  function isLlmThinkingEnabled() {
+    const v = storeGet(LLM_THINKING_KEY, false);
+    return v === true || v === 'true' || v === 1;
+  }
+
+  /** Fields merged into every Sensebook chat/completions body (incl. retries). */
+  function llmThinkingBodyFields() {
+    if (isLlmThinkingEnabled()) {
+      return {
+        thinking: { type: 'enabled' },
+        reasoning_effort: 'high',
+      };
+    }
+    return { thinking: { type: 'disabled' } };
   }
 
   /** Auto-query on selection; default ON. */
@@ -1530,6 +1548,12 @@
   </label>
   <div class="hint" style="margin-top:4px;">划词后约 0.35 秒自动轻量翻译；结果与缓存可在「查询记录」回看。</div>
 
+  <label style="display:flex;align-items:center;gap:8px;font-weight:600;margin-top:14px;">
+    <input type="checkbox" id="llmThinking" style="width:18px;height:18px;" />
+    开启思考
+  </label>
+  <div class="hint" style="margin-top:4px;">默认关闭以加快速度、降低费用；难句可开启（翻译 / 存本并释义共用）。</div>
+
   <div class="note">
     Sensebook 的 Base URL 是 OpenAI 兼容的 <strong>/v1</strong> 根（例如 <code>https://api.deepseek.com/v1</code>），脚本会自动追加 <code>/chat/completions</code>，请勿填完整 completions 路径。
   </div>
@@ -1557,6 +1581,8 @@
     keyStatus.textContent = '当前：' + maskApiKey(curKey);
     const autoQueryInput = $('autoQuery');
     if (autoQueryInput) autoQueryInput.checked = isAutoQueryEnabled();
+    const thinkingInput = $('llmThinking');
+    if (thinkingInput) thinkingInput.checked = isLlmThinkingEnabled();
     const card = shadow.querySelector('.card');
     card.addEventListener('click', (e) => e.stopPropagation());
 
@@ -1593,6 +1619,7 @@
       storeSet(LLM_MODEL_KEY, model || DEFAULT_LLM_MODEL);
       storeSet(ONBOARDING_DONE_KEY, true);
       if (autoQueryInput) setAutoQueryEnabled(!!autoQueryInput.checked);
+      if (thinkingInput) storeSet(LLM_THINKING_KEY, !!thinkingInput.checked);
       updateFabState();
       // Reflect defaults in fields if user cleared
       if (!base) baseInput.value = DEFAULT_LLM_BASE_URL;
@@ -1630,6 +1657,7 @@
             model: useModel,
             temperature: 0,
             max_tokens: 8,
+            thinking: { type: 'disabled' },
             messages: [{ role: 'user', content: 'ping' }],
           },
         });
@@ -2191,16 +2219,18 @@
 
     const url = base + '/chat/completions';
     const headers = { Authorization: 'Bearer ' + key };
+    const thinkingFields = llmThinkingBodyFields();
     const body = {
       model,
       temperature: 0.2,
+      ...thinkingFields,
       ...(jsonResponse ? { response_format: { type: 'json_object' } } : {}),
       messages,
     };
 
     let res = await gmRequest(url, { method: 'POST', headers, body });
 
-    // Some providers reject response_format — retry without
+    // Some providers reject response_format — retry without (keep thinking flag)
     if (jsonResponse && res.status >= 400) {
       const errText = (res.raw || '') + JSON.stringify(res.data || {});
       const formatRejected =
@@ -2209,6 +2239,7 @@
         const bodyNoFormat = {
           model,
           temperature: 0.2,
+          ...thinkingFields,
           messages,
         };
         res = await gmRequest(url, { method: 'POST', headers, body: bodyNoFormat });
