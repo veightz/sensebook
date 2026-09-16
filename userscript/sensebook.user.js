@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609161649
+// @version      0.1.202609161941
 // @description  划词自动查询 / 翻译 / 加入生词本 / AI 释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -802,7 +802,10 @@
     applyStyles(el, {
       display: 'none',
       width: '100%',
-      marginTop: '4px',
+      minWidth: '0',
+      maxWidth: 'none',
+      alignSelf: 'stretch',
+      marginTop: '0',
       padding: '8px 10px',
       borderRadius: '8px',
       background: '#f8fafc',
@@ -810,7 +813,6 @@
       fontSize: '13px',
       lineHeight: '1.5',
       color: '#0f172a',
-      maxWidth: 'min(360px, calc(100vw - 32px))',
       maxHeight: '220px',
       overflow: 'auto',
       boxSizing: 'border-box',
@@ -972,8 +974,10 @@
       zIndex: '2147483646',
       display: 'flex',
       flexDirection: 'column',
+      alignItems: 'stretch',
       gap: '4px',
       padding: '6px',
+      width: 'max-content',
       maxWidth: 'calc(100vw - 16px)',
       boxSizing: 'border-box',
       background: '#fff',
@@ -988,6 +992,9 @@
       display: 'flex',
       gap: '6px',
       flexWrap: 'wrap',
+      width: 'max-content',
+      maxWidth: '100%',
+      boxSizing: 'border-box',
     });
 
     const mkBtn = (label, onClick, bg) => {
@@ -1005,6 +1012,8 @@
         fontSize: '14px',
         cursor: 'pointer',
         touchAction: 'manipulation',
+        flex: '0 0 auto',
+        whiteSpace: 'nowrap',
       });
       b.addEventListener('mousedown', (e) => e.preventDefault());
       b.addEventListener('click', (e) => {
@@ -1027,6 +1036,12 @@
     ensurePopupResultEl();
     resetPopupResultSlots();
     document.documentElement.appendChild(popup);
+    // Result starts hidden, so width is toolbar-driven. Lock it so the result
+    // card stretches to the same width instead of a narrower 360px cap.
+    try {
+      const w = popup.offsetWidth;
+      if (w > 0) popup.style.width = w + 'px';
+    } catch { /* ignore */ }
     repositionPopup(rect);
   }
 
