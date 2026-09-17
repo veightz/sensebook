@@ -17,8 +17,8 @@
 | `user_id` | TEXT | 可选* | 所属用户，仅服务端鉴权后写入 |
 | `word` | TEXT | 是 | 划词选中的单词/短语 |
 | `sentence` | TEXT | 是 | 上下文句子 |
-| `ai_sentence_gloss` | TEXT | 否 | AI 对整句的释义/翻译（本地无 API 时可为 stub） |
-| `ai_word_sense` | TEXT | 否 | AI 对该词在句中的义项（本地 stub 同理） |
+| `ai_sentence_gloss` | TEXT | 否 | 句内搭配效果（修饰语+中心词等组合语气；本地无 API 时可为 stub） |
+| `ai_word_sense` | TEXT | 否 | 选中词的独立义项（勿焊入中心词意思；本地 stub 同理） |
 | `source_url` | TEXT | 否 | 来源页面 URL |
 | `tags` | TEXT / JSON array | 否 | 标签，如 `["tech","novel"]`；本地存为数组 |
 | `status` | TEXT | 否 | `pending_ai` \| `ready` \| `failed`，默认 `pending_ai` |

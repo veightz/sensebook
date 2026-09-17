@@ -4,15 +4,22 @@
  */
 
 export const ENRICH_SYSTEM_PROMPT =
-  '你是简洁的语境词汇助教。根据用户给出的单词、句子与来源页，用中文解释。' +
-  '只输出 JSON 对象：{"ai_sentence_gloss":"整句中文释义（简洁）","ai_word_sense":"该词在此句中的中文义项（含词性/用法提示，简洁）"}。' +
-  '不要输出 Markdown 或其它文字。';
+  '你是简洁的语境词汇助教。根据用户给出的选中词、句子与来源页，用中文解释。' +
+  '输出必须严格拆成两部分，禁止把中心词（head）的词义焊进修饰语（modifier）的独立义项：' +
+  '1) ai_word_sense＝独立义项：只解释选中词本身（词性+本义/常见义），不要夹带搭配对象的意思；' +
+  '2) ai_sentence_gloss＝句内搭配效果：说明该词与句中相邻词（如修饰语+中心词）组合后的语气/程度/修辞效果；可略提整句大意，但重点是搭配而非干译整句。' +
+  '短例（选中 fantastic，句中有 fantastic speed）：' +
+  '错误 ai_word_sense「极快的速度」（把 speed 焊进了 fantastic）；' +
+  '正确 ai_word_sense「adj. 极好的；出色的；了不起的」；' +
+  '正确 ai_sentence_gloss「与 speed 搭配时强调速度之惊人/极快；在本句中…」。' +
+  '只输出 JSON：{"ai_word_sense":"…","ai_sentence_gloss":"…"}。不要 Markdown 或其它文字。';
 
 export function buildEnrichUserPrompt({ word, sentence, source_url }) {
   return [
-    `单词：${word || ''}`,
+    `选中词：${word || ''}`,
     `句子：${sentence || ''}`,
     `来源：${source_url || ''}`,
+    '请分别给出：ai_word_sense＝选中词的独立义项（勿把中心词意思焊进修饰语）；ai_sentence_gloss＝句内搭配效果（修饰语+中心词等组合语气）。',
   ].join('\n');
 }
 
@@ -100,8 +107,8 @@ async function chatRaw(system, user) {
 export async function enrichEntry({ word, sentence, source_url }) {
   if (!hasLlm()) {
     return {
-      ai_sentence_gloss: `[stub] 句子大意：「${(sentence || '').slice(0, 80)}${(sentence || '').length > 80 ? '…' : ''}」`,
-      ai_word_sense: `[stub] 「${word}」在此句中的义项（配置 OPENAI_COMPATIBLE_* 后启用真实 AI）`,
+      ai_sentence_gloss: `[stub] 搭配效果占位：「${(sentence || '').slice(0, 80)}${(sentence || '').length > 80 ? '…' : ''}」`,
+      ai_word_sense: `[stub] 「${word}」独立义项占位（配置 OPENAI_COMPATIBLE_* 后启用真实 AI）`,
       stub: true,
     };
   }

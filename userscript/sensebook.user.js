@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609170156
+// @version      0.1.202609171620
 // @description  划词自动查询 / 翻译 / 加入生词本 / 存本并释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -245,9 +245,15 @@
   const DEFAULT_LLM_MODEL = 'deepseek-flash';
 
   const ENRICH_SYSTEM_PROMPT =
-    '你是简洁的语境词汇助教。根据用户给出的单词、句子与来源页，用中文解释。' +
-    '只输出 JSON 对象：{"ai_sentence_gloss":"整句中文释义（简洁）","ai_word_sense":"该词在此句中的中文义项（含词性/用法提示，简洁）"}。' +
-    '不要输出 Markdown 或其它文字。';
+    '你是简洁的语境词汇助教。根据用户给出的选中词、句子与来源页，用中文解释。' +
+    '输出必须严格拆成两部分，禁止把中心词（head）的词义焊进修饰语（modifier）的独立义项：' +
+    '1) ai_word_sense＝独立义项：只解释选中词本身（词性+本义/常见义），不要夹带搭配对象的意思；' +
+    '2) ai_sentence_gloss＝句内搭配效果：说明该词与句中相邻词（如修饰语+中心词）组合后的语气/程度/修辞效果；可略提整句大意，但重点是搭配而非干译整句。' +
+    '短例（选中 fantastic，句中有 fantastic speed）：' +
+    '错误 ai_word_sense「极快的速度」（把 speed 焊进了 fantastic）；' +
+    '正确 ai_word_sense「adj. 极好的；出色的；了不起的」；' +
+    '正确 ai_sentence_gloss「与 speed 搭配时强调速度之惊人/极快；在本句中…」。' +
+    '只输出 JSON：{"ai_word_sense":"…","ai_sentence_gloss":"…"}。不要 Markdown 或其它文字。';
 
   // ---- storage helpers (safe gmGet/gmSet + localStorage fallback) ----
   function coerceStoreValue(v) {
@@ -694,8 +700,8 @@
 
   function clientStubEnrich(word, sentence) {
     return {
-      ai_sentence_gloss: `[本地 stub] 句意占位：${(sentence || '').slice(0, 80)}`,
-      ai_word_sense: `[本地 stub] 「${word}」在句中的义项（未配置 LLM API Key，仅占位）`,
+      ai_sentence_gloss: `[本地 stub] 搭配效果占位（未配置 LLM）：与句中相邻词的组合语气待生成；句摘：「${(sentence || '').slice(0, 60)}」`,
+      ai_word_sense: `[本地 stub] 「${word}」独立义项占位（未配置 LLM API Key）`,
     };
   }
 
@@ -705,9 +711,10 @@
 
   function buildEnrichUserPrompt({ word, sentence, source_url }) {
     return [
-      `单词：${word || ''}`,
+      `选中词：${word || ''}`,
       `句子：${sentence || ''}`,
       `来源：${source_url || ''}`,
+      '请分别给出：ai_word_sense＝选中词的独立义项（勿把中心词意思焊进修饰语）；ai_sentence_gloss＝句内搭配效果（修饰语+中心词等组合语气）。',
     ].join('\n');
   }
 
@@ -740,6 +747,54 @@
     if (!text) throw new Error('LLM 返回空译文');
     return text;
   }
+
+
+  // ---- Browser speechSynthesis (local TTS; no cloud) ----
+  function speakText(text, langHint) {
+    const t = String(text || '').trim();
+    if (!t) {
+      toast('没有可朗读的内容');
+      return false;
+    }
+    const synth = typeof window !== 'undefined' ? window.speechSynthesis : null;
+    if (!synth || typeof SpeechSynthesisUtterance === 'undefined') {
+      toast('当前浏览器不支持朗读');
+      return false;
+    }
+    try { synth.cancel(); } catch { /* ignore */ }
+    const u = new SpeechSynthesisUtterance(t);
+    if (langHint) {
+      u.lang = langHint;
+    } else if (/[\u4e00-\u9fff]/.test(t)) {
+      u.lang = 'zh-CN';
+    } else {
+      u.lang = 'en-US';
+    }
+    try {
+      synth.speak(u);
+      return true;
+    } catch (err) {
+      toast('朗读失败：' + (err && err.message ? err.message : String(err)));
+      return false;
+    }
+  }
+
+  function speakWord(word) {
+    return speakText(word, 'en-US');
+  }
+
+  function speakSentence(sentence) {
+    const s = String(sentence || '').trim();
+    if (!s) {
+      toast('没有可朗读的句子');
+      return false;
+    }
+    // Prefer EN for Latin-heavy sentences; otherwise leave auto (zh if CJK).
+    const latin = (s.match(/[A-Za-z]/g) || []).length;
+    const cjk = (s.match(/[\u4e00-\u9fff]/g) || []).length;
+    return speakText(s, latin >= cjk ? 'en-US' : 'zh-CN');
+  }
+
 
   // Menus + FAB boot run at end (after function decls); safe gmMenu never aborts IIFE.
 
@@ -1104,7 +1159,7 @@
   }
 
   /**
-   * 存本并释义 result — labeled 词义 / 句意 (not the translate dual-out layout).
+   * 存本并释义 result — labeled 词义 / 搭配效果 (not the translate dual-out layout).
    * kind: 'ok' | 'loading' | 'error' | 'hint'
    */
   function setSenseGlossResult({ ai_word_sense, ai_sentence_gloss } = {}, kind) {
@@ -1157,7 +1212,7 @@
         paddingBottom: '0',
         borderBottom: 'none',
       });
-      _paintMetaHint(modelRow, '句意', '#a78bfa');
+      _paintMetaHint(modelRow, '搭配效果', '#a78bfa');
       const text = document.createElement('div');
       applyStyles(text, {
         whiteSpace: 'pre-wrap',
@@ -1180,7 +1235,7 @@
     }
   }
 
-  /** Translate-path body: translation only (never mix 词义/句意 into the blob). */
+  /** Translate-path body: translation only (never mix 词义/搭配效果 into the blob). */
   function formatTranslateResult(rec) {
     if (!rec) return '';
     return String(rec.translation || '').trim();
@@ -1242,13 +1297,18 @@
       { tag: 'path', attrs: { d: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20' } },
       { tag: 'path', attrs: { d: 'M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z' } },
     ],
+    speak: [
+      { tag: 'polygon', attrs: { points: '11 5 6 9 2 9 2 15 6 15 11 19 11 5' } },
+      { tag: 'path', attrs: { d: 'M15.54 8.46a5 5 0 0 1 0 7.07' } },
+      { tag: 'path', attrs: { d: 'M19.07 4.93a10 10 0 0 1 0 14.14' } },
+    ],
   };
 
   function _clampPopupResultMaxHeight(vh, margin) {
     if (!popup || !popupResultEl) return;
     const btnH = popupBtnRow ? popupBtnRow.offsetHeight : 0;
     const pad = 16; // popup padding + gaps
-    // Cap only to remaining viewport: no extra 220px lid, so longer 词义/句意
+    // Cap only to remaining viewport: no extra 220px lid, so longer 词义/搭配效果
     // do not internally scroll when the whole popup can still fit.
     const available = Math.max(72, vh - 2 * margin - btnH - pad);
     popupResultEl.style.maxHeight = available + 'px';
@@ -1355,7 +1415,7 @@
       // Equal columns inside the already-frozen popup width. Do not use
       // space-between on a growing card — that was the moving hit-target bug.
       display: 'grid',
-      gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+      gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
       justifyItems: 'center',
       alignItems: 'center',
       gap: '4px',
@@ -1424,6 +1484,22 @@
       'translate',
       '仅翻译（本地词库 + 模型），不写入生词本'
     ));
+    popupBtnRow.appendChild(mkIconBtn(
+      '朗读单词',
+      'speak',
+      () => speakWord(lastSel && lastSel.text),
+      '#0ea5e9',
+      'speak-word',
+      '朗读选中单词（浏览器本地语音）'
+    ));
+    popupBtnRow.appendChild(mkIconBtn(
+      '朗读句子',
+      'speak',
+      () => speakSentence((lastSel && (lastSel.sentence || lastSel.text)) || ''),
+      '#0284c7',
+      'speak-sentence',
+      '朗读上下文句子（浏览器本地语音）'
+    ));
     popupBtnRow.appendChild(mkIconBtn('复制文本', 'copy', () => copyLastSelectionText(), '#64748b', 'copy'));
     popupBtnRow.appendChild(mkIconBtn('加入生词本', 'addVocab', () => doSave(false), '#2563eb', 'add', '只加入生词本，不生成释义'));
     popupBtnRow.appendChild(mkIconBtn(
@@ -1432,7 +1508,7 @@
       () => doSave(true),
       '#7c3aed',
       'ai',
-      '存入生词本，并生成词义 / 句意（语境释义，非干译）'
+      '存入生词本，并生成词义 / 搭配效果（语境释义，非干译）'
     ));
     popupBtnRow.appendChild(mkIconBtn('我的生词本', 'vocab', () => { hidePopup(); showLocalPanel(); }, '#0f766e', 'vocab'));
 
@@ -1890,7 +1966,7 @@
       <input type="radio" name="autoQueryMode" id="autoQueryModeTranslate" value="translate" style="width:16px;height:16px;" />
       翻译
     </label>
-    <div class="hint" style="margin:0 0 8px;">默认「语境释义」：显示词义/句意（与「存本并释义」同提示词）。「翻译」走本地词库 + 模型双出。</div>
+    <div class="hint" style="margin:0 0 8px;">默认「语境释义」：显示词义/搭配效果（与「存本并释义」同提示词；词义为独立义项）。「翻译」走本地词库 + 模型双出。</div>
     <label id="autoSaveVocabLabel" style="display:flex;align-items:center;gap:8px;font-weight:600;margin:0;">
       <input type="checkbox" id="autoSaveVocab" style="width:18px;height:18px;" />
       自动加入生词本
@@ -2168,7 +2244,7 @@
         <div style="font-size:13px;color:#64748b;margin-bottom:4px;">翻译</div>
         <div style="font-size:14px;color:#0f172a;margin-bottom:12px;white-space:pre-wrap;">${escapeHtml(rec.translation || '（无）')}</div>
         ${rec.ai_word_sense ? `<div style="font-size:13px;color:#64748b;margin-bottom:4px;">词义</div><div style="font-size:14px;margin-bottom:12px;white-space:pre-wrap;">${escapeHtml(rec.ai_word_sense)}</div>` : ''}
-        ${rec.ai_sentence_gloss ? `<div style="font-size:13px;color:#64748b;margin-bottom:4px;">句意</div><div style="font-size:14px;margin-bottom:12px;white-space:pre-wrap;">${escapeHtml(rec.ai_sentence_gloss)}</div>` : ''}
+        ${rec.ai_sentence_gloss ? `<div style="font-size:13px;color:#64748b;margin-bottom:4px;">搭配效果</div><div style="font-size:14px;margin-bottom:12px;white-space:pre-wrap;">${escapeHtml(rec.ai_sentence_gloss)}</div>` : ''}
         ${renderSourceUrlHtml(rec.source_url)}
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
@@ -2338,12 +2414,18 @@
     } else {
       body.innerHTML = entries.map((e) => `
         <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:10px;" data-id="${escapeHtml(e.id)}">
-          <div style="font-weight:700;font-size:15px;">${escapeHtml(e.word)}
-            <span style="font-size:11px;padding:2px 6px;border-radius:999px;background:#e2e8f0;font-weight:500;margin-left:6px;">${escapeHtml(e.status || '')}</span>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <div style="font-weight:700;font-size:15px;">${escapeHtml(e.word)}
+              <span style="font-size:11px;padding:2px 6px;border-radius:999px;background:#e2e8f0;font-weight:500;margin-left:6px;">${escapeHtml(e.status || '')}</span>
+            </div>
+            <button type="button" data-speak-word="${escapeHtml(e.id)}" aria-label="朗读单词" title="朗读单词" style="width:28px;height:28px;min-width:28px;padding:0;border:none;border-radius:8px;background:#0ea5e9;color:#fff;cursor:pointer;font-size:13px;line-height:1;">🔊</button>
           </div>
-          <div style="margin:6px 0;color:#334155;font-size:13px;">${escapeHtml(e.sentence)}</div>
+          <div style="margin:6px 0;color:#334155;font-size:13px;display:flex;align-items:flex-start;gap:8px;">
+            <div style="flex:1;min-width:0;">${escapeHtml(e.sentence)}</div>
+            ${e.sentence ? `<button type="button" data-speak-sentence="${escapeHtml(e.id)}" aria-label="朗读句子" title="朗读句子" style="width:28px;height:28px;min-width:28px;padding:0;border:none;border-radius:8px;background:#0284c7;color:#fff;cursor:pointer;font-size:13px;line-height:1;flex-shrink:0;">🔊</button>` : ''}
+          </div>
           ${e.ai_word_sense ? `<div style="font-size:12px;color:#475569;margin-top:4px;"><strong>词义：</strong>${escapeHtml(e.ai_word_sense)}</div>` : ''}
-          ${e.ai_sentence_gloss ? `<div style="font-size:12px;color:#475569;margin-top:4px;"><strong>句意：</strong>${escapeHtml(e.ai_sentence_gloss)}</div>` : ''}
+          ${e.ai_sentence_gloss ? `<div style="font-size:12px;color:#475569;margin-top:4px;"><strong>搭配效果：</strong>${escapeHtml(e.ai_sentence_gloss)}</div>` : ''}
           <div style="font-size:11px;color:#94a3b8;margin-top:8px;">${escapeHtml(e.created_at || '')}</div>
           ${renderSourceUrlHtml(e.source_url)}
           <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
@@ -2356,6 +2438,17 @@
     panel.appendChild(body);
 
     body.addEventListener('click', async (ev) => {
+      const speakWordId = ev.target.getAttribute && ev.target.getAttribute('data-speak-word');
+      const speakSentId = ev.target.getAttribute && ev.target.getAttribute('data-speak-sentence');
+      if (speakWordId || speakSentId) {
+        const list = loadEntries();
+        const id = speakWordId || speakSentId;
+        const entry = list.find((x) => x.id === id);
+        if (!entry) return;
+        if (speakWordId) speakWord(entry.word);
+        else speakSentence(entry.sentence);
+        return;
+      }
       const enrichId = ev.target.getAttribute && ev.target.getAttribute('data-enrich-local');
       const delId = ev.target.getAttribute && ev.target.getAttribute('data-del-local');
       if (enrichId) {
@@ -2576,7 +2669,7 @@
     const parts = [];
     if (rec.translation) parts.push(rec.translation);
     if (rec.ai_word_sense) parts.push('词义：' + rec.ai_word_sense);
-    if (rec.ai_sentence_gloss) parts.push('句意：' + rec.ai_sentence_gloss);
+    if (rec.ai_sentence_gloss) parts.push('搭配效果：' + rec.ai_sentence_gloss);
     return parts.join('\n') || '';
   }
 
@@ -2636,7 +2729,7 @@
   }
 
   /**
-   * Contextual 词义/句意 lookup (same enrich prompt as 存本并释义).
+   * Contextual 词义/搭配效果 lookup (same enrich prompt as 存本并释义).
    * Does not write vocab. Caller handles display / optional save.
    */
   async function runSenseLookup({ word, sentence, source_url, forceRefresh }) {
@@ -2975,7 +3068,7 @@
         return;
       }
 
-      // 存本并释义 path — save to vocab + contextual 词义/句意 (not dry translation)
+      // 存本并释义 path — save to vocab + contextual 词义/搭配效果 (not dry translation)
       const reqId = selectionGen;
       busy = true;
       resetPopupResultSlots();
@@ -3039,7 +3132,7 @@
           );
         }
         busy = false;
-        // Keep popup open so structured 词义/句意 result stays visible
+        // Keep popup open so structured 词义/搭配效果 result stays visible
       } catch (llmErr) {
         patchLocalEntry(entry.id, { status: 'failed' });
         if (reqId === selectionGen && popup) {

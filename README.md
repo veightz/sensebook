@@ -40,7 +40,8 @@ Chrome 138+ 需要单独打开油猴的用户脚本权限，否则脚本显示�
    - **选中自动查询**（默认开）→ 短词先出「本地词库」释义，模型并行补第二行（「查询中…」）；整句仅模型。可在 LLM 设置或 FAB 中开关（键名 `sensebook_auto_query`）
    - **翻译** → 仅翻译（本地词库 + 模型双出），**不**写入生词本；命中本地缓存则即时回看，可再点翻译强制刷新
    - **加入生词本** → 写入本地生词本（键名 `sensebook_entries`），**无需 API / Token**
-   - **存本并释义** → 存入生词本，并生成语境「词义 / 句意」（非干译）；已配置 DeepSeek Key 时直连模型，否则本地 stub；结果区与翻译布局区分显示
+   - **存本并释义** → 存入生词本，并生成语境「词义 / 搭配效果」（非干译）；已配置 DeepSeek Key 时直连模型，否则本地 stub；结果区与翻译布局区分显示
+   - **朗读** → 浮层与生词本小喇叭，用浏览器 `speechSynthesis` 读单词/句子（无云端 TTS）
 4. 油猴菜单 / FAB：**「我的生词本」**、**「查询记录」**（本地缓存 `sensebook_query_cache`，约 250 条 LRU）、**「LLM 设置」**。也可从划词弹层的 **DeepSeek** / **我的生词本** 进入。
 
 本地模式说明也会在菜单「关于本地模式」中提示。登录相关菜单标注为 **「登录/同步（可选）」**。
@@ -134,12 +135,12 @@ curl -s -X POST http://127.0.0.1:8787/auth/login \
 1. 只安装用户脚本，**不要**配置 API / Token / LLM Key。
 2. 任意网页划词 → **加入生词本** → toast 提示已加入生词本。
 3. 菜单打开 **我的生词本（本地）**，可见刚存的词条。
-4. **存本并释义**（无 Key）应写入 stub 句意/词义，`status` 为 `ready`；结果区应分栏显示「词义」「句意」。
+4. **存本并释义**（无 Key）应写入 stub 搭配效果/词义，`status` 为 `ready`；结果区应分栏显示「词义」「搭配效果」。
 
 ### B. 真实 LLM（油猴直连 DeepSeek）
 
 1. 菜单打开 **「Sensebook：LLM 设置」**，填入 DeepSeek API Key（URL/模型可用默认），保存；可用「测试连接」。
-2. 划词 → **存本并释义** → 等待加载 → 本地词库出现中文句意/词义，`status=ready`。
+2. 划词 → **存本并释义** → 等待加载 → 本地词库出现中文搭配效果/词义，`status=ready`。
 3. 故意填错 Key → 应 toast 失败且词条 `status=failed`（词条仍保留）。
 
 ### C. 可选服务端联调
@@ -166,7 +167,7 @@ npm test
 | POST | `/auth/login` | 登录，返回 JWT |
 | GET/POST | `/entries` | 列表 / 创建（需 Bearer） |
 | GET/PATCH/DELETE | `/entries/:id` | 读写删 |
-| POST | `/entries/:id/enrich` | AI 句意+词义 |
+| POST | `/entries/:id/enrich` | AI 搭配效果+词义 |
 | POST | `/translate` | 翻译 `{text}` |
 
 数据字段见 [docs/schema.md](docs/schema.md)。本地存储使用相同字段（无 `user_id`，`id` 由客户端生成）。

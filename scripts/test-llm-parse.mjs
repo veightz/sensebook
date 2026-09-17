@@ -22,6 +22,9 @@ function test(name, fn) {
 test('system prompt mentions JSON keys', () => {
   assert.match(ENRICH_SYSTEM_PROMPT, /ai_sentence_gloss/);
   assert.match(ENRICH_SYSTEM_PROMPT, /ai_word_sense/);
+  assert.match(ENRICH_SYSTEM_PROMPT, /独立义项/);
+  assert.match(ENRICH_SYSTEM_PROMPT, /搭配效果/);
+  assert.match(ENRICH_SYSTEM_PROMPT, /fantastic speed/);
 });
 
 test('buildEnrichUserPrompt includes word/sentence/source', () => {
@@ -33,6 +36,8 @@ test('buildEnrichUserPrompt includes word/sentence/source', () => {
   assert.match(p, /apple/);
   assert.match(p, /I ate an apple/);
   assert.match(p, /example\.com/);
+  assert.match(p, /选中词/);
+  assert.match(p, /独立义项/);
 });
 
 test('parseEnrichJson plain object', () => {

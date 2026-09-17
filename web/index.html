@@ -176,7 +176,7 @@
           </div>
           <div class="sentence">${escapeHtml(e.sentence)}</div>
           ${e.ai_word_sense ? `<div class="gloss"><strong>词义：</strong>${escapeHtml(e.ai_word_sense)}</div>` : ''}
-          ${e.ai_sentence_gloss ? `<div class="gloss"><strong>句意：</strong>${escapeHtml(e.ai_sentence_gloss)}</div>` : ''}
+          ${e.ai_sentence_gloss ? `<div class="gloss"><strong>搭配效果：</strong>${escapeHtml(e.ai_sentence_gloss)}</div>` : ''}
           <div class="meta">
             ${e.source_url ? `<a href="${escapeAttr(e.source_url)}" target="_blank" rel="noopener">来源</a> · ` : ''}
             ${escapeHtml(e.created_at || '')}
