@@ -9,3 +9,12 @@ dist/
 .vscode/
 *.log
 data/
+
+# Android
+android/.gradle/
+android/local.properties
+android/.idea/
+android/**/build/
+android/*.iml
+*.apk
+*.aab

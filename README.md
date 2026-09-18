@@ -4,7 +4,7 @@
 
 > **默认可不登录**：油猴脚本将词条保存在浏览器本地存储（`GM_setValue` / `localStorage`）。服务器与账号仅用于**可选**同步，不是 MVP 必需。
 
-本仓库为本地 MVP 脚手架：Tampermonkey 用户脚本（主路径）+ 可选 Node/Hono/SQLite 后端。无 Android 应用。
+本仓库为本地 MVP 脚手架：Tampermonkey 用户脚本（主路径）+ 可选 Node/Hono/SQLite 后端 + [`android/`](android/) PROCESS_TEXT 划词 MVP（Kotlin）。
 
 
 
@@ -87,6 +87,21 @@ Chrome 138+ 需要单独打开油猴的用户脚本权限，否则脚本显示�
 > **安全提醒**：API Key 只存在你本机的油猴/`GM_setValue` 中，请勿提交到仓库或发给他人。
 
 可选同步用的「登录/同步 — API 地址 / Token」与 LLM 设置相互独立，不要混填到本面板。
+
+
+
+## Android（PROCESS_TEXT MVP）
+
+系统划词菜单入口（**仅** `ACTION_PROCESS_TEXT`；无悬浮球 / 无无障碍服务；分享页稍后）。
+
+| | |
+|--|--|
+| 工程路径 | [`android/`](android/)（包名 `com.veightz.sensebook`） |
+| 打开方式 | Android Studio → **Open** → 选 `android/` 目录 |
+| 构建 | `cd android && ./gradlew :app:assembleDebug` → `app/build/outputs/apk/debug/app-debug.apk` |
+| 验证入口 | 安装 APK → 任意 App 长按选词 → 工具栏/溢出菜单中的 **Sensebook** |
+
+详情、里程碑与排障见 [`android/README.md`](android/README.md)。
 
 ## 可选：启动本地服务器（同步 / 词库页）
 

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Sensebook" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/sensebook_primary</item>
+        <item name="colorOnPrimary">@color/sensebook_on_primary</item>
+        <item name="android:statusBarColor">@color/sensebook_primary</item>
+        <item name="android:windowBackground">@color/sensebook_surface</item>
+    </style>
+
+    <!-- Compact sheet-like window for PROCESS_TEXT. -->
+    <style name="Theme.Sensebook.Dialog" parent="Theme.MaterialComponents.DayNight.Dialog">
+        <item name="colorPrimary">@color/sensebook_primary</item>
+        <item name="colorOnPrimary">@color/sensebook_on_primary</item>
+        <item name="android:windowMinWidthMajor">90%</item>
+        <item name="android:windowMinWidthMinor">90%</item>
+        <item name="android:windowBackground">@color/sensebook_surface</item>
+    </style>
+</resources>

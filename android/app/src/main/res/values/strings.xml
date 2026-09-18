@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Sensebook</string>
+    <string name="process_text_label">Sensebook</string>
+    <string name="selected_label">选中文本</string>
+    <string name="local_gloss_label">本地词库</string>
+    <string name="model_gloss_label">模型</string>
+    <string name="phonetic_label">音标</string>
+    <string name="pos_label">词性</string>
+    <string name="save_vocab">加入生词本</string>
+    <string name="deepseek_settings">DeepSeek 设置</string>
+    <string name="placeholder_model">（后续：DeepSeek 双出行）</string>
+    <string name="placeholder_phonetic">—</string>
+    <string name="local_miss">未命中本地词库</string>
+    <string name="local_loading">加载词库…</string>
+    <string name="saved_toast">已加入生词本（本地）</string>
+    <string name="deepseek_stub_title">DeepSeek 设置</string>
+    <string name="deepseek_stub_message">v1 占位：Key / Base URL / 模型将保存在本机 SharedPreferences。P0 仅 DeepSeek；勿把 Key 提交到仓库。</string>
+    <string name="ok">知道了</string>
+    <string name="dict_meta">词库 %1$s · %2$d 词</string>
+</resources>

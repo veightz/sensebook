@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:fillViewport="true"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/selected_label"
+            android:textColor="@color/sensebook_muted"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/selectedText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="@color/sensebook_on_surface"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            tools:text="example" />
+
+        <TextView
+            android:id="@+id/phoneticRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="@color/sensebook_muted"
+            android:textSize="13sp"
+            tools:text="音标 — · 词性 n." />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="12dp"
+            android:background="@color/sensebook_divider" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/local_gloss_label"
+            android:textColor="@color/sensebook_muted"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/localGloss"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="@color/sensebook_on_surface"
+            android:textSize="16sp"
+            tools:text="例子，榜样" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/model_gloss_label"
+            android:textColor="@color/sensebook_muted"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/modelGloss"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/placeholder_model"
+            android:textColor="@color/sensebook_muted"
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/dictMeta"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:textColor="@color/sensebook_muted"
+            android:textSize="11sp"
+            tools:text="词库 0.1 · 10000 词" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:gravity="end"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnDeepSeekSettings"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/deepseek_settings" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnSaveVocab"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="@string/save_vocab" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>
