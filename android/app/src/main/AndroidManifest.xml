@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- DeepSeek / dict download later; not required for local assets lookup. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
@@ -14,8 +13,8 @@
         android:fullBackupContent="@xml/backup_rules">
 
         <!--
-          Single Activity MVP: system text selection → ACTION_PROCESS_TEXT.
-          No launcher icon on purpose (v1). Share sheet / floating bubble out of scope.
+          Single Activity: system text selection → ACTION_PROCESS_TEXT.
+          No launcher icon (v1). Share sheet / floating bubble / a11y out of scope.
         -->
         <activity
             android:name=".ProcessTextActivity"

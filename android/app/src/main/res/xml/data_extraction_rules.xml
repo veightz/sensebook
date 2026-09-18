@@ -2,8 +2,12 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="sensebook_llm.xml" />
+        <exclude domain="sharedpref" path="sensebook_llm_legacy.xml" />
+        <exclude domain="sharedpref" path="sensebook_llm_plain.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="sensebook_llm.xml" />
+        <exclude domain="sharedpref" path="sensebook_llm_legacy.xml" />
+        <exclude domain="sharedpref" path="sensebook_llm_plain.xml" />
     </device-transfer>
 </data-extraction-rules>

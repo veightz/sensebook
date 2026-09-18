@@ -90,16 +90,18 @@ Chrome 138+ 需要单独打开油猴的用户脚本权限，否则脚本显示�
 
 
 
-## Android（PROCESS_TEXT MVP）
+## Android（PROCESS_TEXT · M2）
 
-系统划词菜单入口（**仅** `ACTION_PROCESS_TEXT`；无悬浮球 / 无无障碍服务；分享页稍后）。
+系统划词菜单入口（**仅** `ACTION_PROCESS_TEXT`；无悬浮球 / 无无障碍服务；分享页稍后）。`versionName` **0.1.1**。
 
 | | |
 |--|--|
 | 工程路径 | [`android/`](android/)（包名 `com.veightz.sensebook`） |
+| 双出 | 短词：本地词库 + DeepSeek 词义/搭配效果并行；整句：仅模型 |
+| Key | 本机 EncryptedSharedPreferences；设置里可改 Key / Base URL / 模型 / thinking |
 | 打开方式 | Android Studio → **Open** → 选 `android/` 目录 |
 | 构建 | `cd android && ./gradlew :app:assembleDebug` → `app/build/outputs/apk/debug/app-debug.apk` |
-| 验证入口 | 安装 APK → 任意 App 长按选词 → 工具栏/溢出菜单中的 **Sensebook** |
+| 验证入口 | 安装 APK → 任意 App 长按选词 → **Sensebook** → 见本地+模型 |
 
 详情、里程碑与排障见 [`android/README.md`](android/README.md)。
 

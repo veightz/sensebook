@@ -37,6 +37,17 @@
             android:textSize="13sp"
             tools:text="音标 — · 词性 n." />
 
+        <TextView
+            android:id="@+id/sourceRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textColor="@color/sensebook_muted"
+            android:textSize="11sp"
+            android:visibility="gone"
+            tools:text="来源 app: com.android.chrome"
+            tools:visibility="visible" />
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"
@@ -64,16 +75,33 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="@string/model_gloss_label"
+            android:text="@string/model_sense_label"
             android:textColor="@color/sensebook_muted"
             android:textSize="12sp" />
 
         <TextView
-            android:id="@+id/modelGloss"
+            android:id="@+id/modelWordSense"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="@string/placeholder_model"
+            android:text="@string/model_loading"
+            android:textColor="@color/sensebook_muted"
+            android:textSize="16sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/model_collocation_label"
+            android:textColor="@color/sensebook_muted"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/modelSentenceGloss"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/model_loading"
             android:textColor="@color/sensebook_muted"
             android:textSize="16sp" />
 
