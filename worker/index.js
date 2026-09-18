@@ -326,7 +326,7 @@ function cleanEvent(e) {
     source_url: source,
     source_title: str(e.source_title, 500),
     source_app: str(e.source_app, 300),
-    platform: ["userscript", "android", "web"].includes(e.platform)
+    platform: ["userscript", "android", "web", "macos"].includes(e.platform)
       ? e.platform
       : "web",
     mode: str(e.mode, 30),

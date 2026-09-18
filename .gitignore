@@ -24,3 +24,7 @@ android/*.iml
 .dev.vars.*
 !.dev.vars.example
 artifacts/
+macos/.build/
+macos/.swiftpm/
+
+/node_modules

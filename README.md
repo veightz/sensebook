@@ -226,3 +226,13 @@ scripts/test-llm-parse.mjs        # prompt / JSON 解析烟测
 ## 许可
 
 私有仓库 · Sensebook MVP
+
+## 原生体验版（macOS / Android）
+
+Mac 菜单栏 + 浮动翻译窗：`⌘⇧D` 选区翻译，`⌘⇧Space` 手动输入，支持截图本地 OCR、查询足迹、Keychain 模型配置与可选账号同步。Android 支持系统选区、分享文本和首页输入。
+
+- [安装与权限说明](macos/INSTALL.md)
+- [原生设计与范围](docs/plans/native-v1.md)
+- [设计图](docs/native-design.html)
+- Mac 构建：`scripts/build-macos.sh`（macOS + Xcode）；测试：`swift test --package-path macos`
+- 原生安装包通过仓库 GitHub Releases 的预发布页提供；未公证 Mac 包、debug 签名 Android 包，不属于商店发行版。

@@ -98,7 +98,7 @@ test("sync retry is idempotent; later result fills the existing event", async ()
     context: "Certainty gave way to curiosity.",
     explanation: "",
     status: "pending",
-    platform: "userscript",
+    platform: "macos",
     mode: "sense",
     occurred_at: new Date().toISOString(),
     timezone: "Asia/Shanghai",
@@ -120,6 +120,7 @@ test("sync retry is idempotent; later result fills the existing event", async ()
   const r = await req("/api/events");
   assert.equal(r.body.events.length, 1);
   assert.equal(r.body.events[0].explanation, event.explanation);
+  assert.equal(r.body.events[0].platform, "macos");
   await push({ ...event, status: "pending", explanation: "" });
   assert.equal((await req("/api/events")).body.events[0].status, "ready");
 });

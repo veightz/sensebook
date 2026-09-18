@@ -22,7 +22,15 @@ class HistoryActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32,32,32,32); setBackgroundColor(Color.rgb(247,249,242)) }
         val scroll = ScrollView(this).apply { addView(root) }; setContentView(scroll)
-        root.addView(text("Sensebook · 查询记录", 24f)); root.addView(text("在其他应用中选中文字 → Sensebook，即可查询。无需登录，回顾和同步由你选择。"))
+        root.addView(text("Sensebook · 读懂这一刻", 24f)); root.addView(text("选中文字或分享文本到 Sensebook，也可以直接输入。无需登录即可使用自己的模型。"))
+        val input = EditText(this).apply { hint="粘贴或输入你正在读的句子"; minLines=3; maxLines=7; gravity=android.view.Gravity.TOP; inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE }
+        root.addView(input)
+        val actions=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
+        actions.addView(Button(this).apply { text="粘贴"; setOnClickListener { val clip=getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager; if(clip.hasPrimaryClip())input.setText(clip.primaryClip?.getItemAt(0)?.coerceToText(this@HistoryActivity)) } })
+        actions.addView(Button(this).apply { text="理解这段文字"; setOnClickListener { val value=input.text.toString().trim(); if(value.isNotEmpty())startActivity(Intent(this@HistoryActivity,ProcessTextActivity::class.java).putExtra(Intent.EXTRA_PROCESS_TEXT,value.take(12000)))else Toast.makeText(this@HistoryActivity,"先输入一段文字",Toast.LENGTH_SHORT).show() } })
+        root.addView(actions)
+        root.addView(Button(this).apply { text="模型设置"; setOnClickListener { startActivity(Intent(this@HistoryActivity,ProcessTextActivity::class.java).putExtra("open_settings",true)) } })
+        root.addView(text("账号与同步 · 可选",20f))
         status = text(""); root.addView(status)
         val config = EditText(this).apply { hint = "粘贴个人网站生成的连接配置"; minLines = 2; inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD }
         root.addView(config)
@@ -39,6 +47,7 @@ class HistoryActivity : AppCompatActivity() {
         refresh()
         QuerySync.enqueue(applicationContext)
     }
+    override fun onResume() { super.onResume(); if(::records.isInitialized)refresh() }
     private fun work(action: () -> Unit) { status.text="处理中…"; lifecycleScope.launch { val error=withContext(Dispatchers.IO){runCatching { action() }.exceptionOrNull()}; refresh(); if(error!=null)status.text=error.message } }
     private fun refresh() {
         lifecycleScope.launch {

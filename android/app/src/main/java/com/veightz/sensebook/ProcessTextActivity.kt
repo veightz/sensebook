@@ -43,10 +43,11 @@ class ProcessTextActivity : AppCompatActivity() {
         binding = ActivityProcessTextBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        selected = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)
+        selected = (intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)
+            ?: intent.getCharSequenceExtra(Intent.EXTRA_TEXT))
             ?.toString()
             ?.trim()
-            .orEmpty()
+            .orEmpty().take(12000)
 
         sourceApp = resolveSourceApp()
         if (sourceApp.isNotBlank()) {
@@ -69,6 +70,7 @@ class ProcessTextActivity : AppCompatActivity() {
         binding.btnDeepSeekSettings.setOnClickListener { showDeepSeekSettings() }
 
         if (selected.isEmpty()) {
+            if(intent.getBooleanExtra("open_settings",false)) binding.root.post { showDeepSeekSettings() }
             binding.localGloss.text = getString(R.string.local_miss)
             binding.modelWordSense.text = getString(R.string.model_no_text)
             binding.modelSentenceGloss.text = "—"

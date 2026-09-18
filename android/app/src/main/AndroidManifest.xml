@@ -18,10 +18,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <!--
-          Single Activity: system text selection → ACTION_PROCESS_TEXT.
-          No launcher icon (v1). Share sheet / floating bubble / a11y out of scope.
-        -->
+        <!-- 网页外入口：系统文本选区、分享面板与首页手动输入。 -->
         <activity
             android:name=".ProcessTextActivity"
             android:exported="true"
@@ -31,6 +28,11 @@
             android:finishOnTaskLaunch="true">
             <intent-filter>
                 <action android:name="android.intent.action.PROCESS_TEXT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
             </intent-filter>

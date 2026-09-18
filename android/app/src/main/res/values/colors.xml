@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="sensebook_primary">#1B6CA8</color>
+    <color name="sensebook_primary">#496F51</color>
     <color name="sensebook_on_primary">#FFFFFF</color>
-    <color name="sensebook_surface">#FAFBFC</color>
-    <color name="sensebook_on_surface">#1A1C1E</color>
-    <color name="sensebook_muted">#5F6368</color>
-    <color name="sensebook_divider">#E0E3E7</color>
+    <color name="sensebook_surface">#F7F8F2</color>
+    <color name="sensebook_on_surface">#293F32</color>
+    <color name="sensebook_muted">#718172</color>
+    <color name="sensebook_divider">#DCE4D9</color>
 </resources>
