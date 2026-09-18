@@ -183,7 +183,7 @@ app.post('/translate', async (c) => {
 
 // Minimal web UI
 app.get('/', (c) => {
-  const html = readFileSync(join(root, 'web', 'index.html'), 'utf8');
+  const html = readFileSync(join(__dirname, 'legacy.html'), 'utf8');
   return c.html(html);
 });
 

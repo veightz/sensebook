@@ -1,0 +1,2 @@
+# 仅 wrangler 本地预览使用；生产不要设置 DEV_AUTH。
+DEV_AUTH=true

@@ -1,0 +1,10 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sensebook-personal",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-09-01",
+  "assets": { "directory": "./web", "binding": "ASSETS", "run_worker_first": ["/api/*", "/sync/*", "/health", "/login"] },
+  "d1_databases": [{ "binding": "DB", "database_name": "sensebook-personal", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }],
+  "vars": { "ACCESS_TEAM_DOMAIN": "", "ACCESS_AUD": "", "OWNER_EMAIL": "" },
+  "observability": { "enabled": false }
+}

@@ -1,3 +1,21 @@
+# V1 个人回顾数据模型
+
+实际迁移见 `migrations/0001_personal.sql`；同步与鉴权行为见 `docs/tech-design.md`。
+
+| 表 | 用途 |
+|---|---|
+| users | Access 身份映射，个人邮箱 |
+| devices | 独立设备授权，只存凭据摘要，可撤销 |
+| query_events | 选中文字、可空原句、当时解释、来源、安装实例、发生时间/时区、收藏和删除标记 |
+| reviews | 日/周/月回顾正文、覆盖期间、输入指纹和模型 |
+| review_sources | 回顾与原始事件的关联 |
+
+客户端用 UUID 保证上传幂等；服务端从已验证身份决定 user_id，忽略客户端传入的账号字段。未登录记录只在本地。浏览器每条记录独立存 GM 键 `sensebook_event_v1_<id>`；Android 存 SQLite `sensebook_queries.db`。
+
+以下是保留兼容的旧词库模型，不能代表新的持久查询事件。
+
+---
+
 # Sensebook 数据模型
 
 ## 存储模式

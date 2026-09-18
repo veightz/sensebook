@@ -2,6 +2,8 @@
 <full-backup-content>
     <!-- Exclude API keys / encrypted LLM prefs from cloud backup. -->
     <exclude domain="sharedpref" path="sensebook_llm.xml" />
+        <exclude domain="sharedpref" path="sensebook_sync.xml" />
+        <exclude domain="sharedpref" path="sensebook_device.xml" />
     <exclude domain="sharedpref" path="sensebook_llm_legacy.xml" />
     <exclude domain="sharedpref" path="sensebook_llm_plain.xml" />
 </full-backup-content>

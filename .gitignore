@@ -18,3 +18,9 @@ android/**/build/
 android/*.iml
 *.apk
 *.aab
+
+.wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+artifacts/

@@ -2,17 +2,21 @@
   "name": "sensebook",
   "version": "0.1.0",
   "private": true,
-  "description": "Sensebook \u2014 browser-first \u5212\u8bcd vocab tool",
+  "description": "Sensebook — browser-first 划词 vocab tool",
   "type": "module",
   "scripts": {
     "dev": "node --watch server/index.js",
     "start": "node server/index.js",
     "db:init": "node server/db.js --init",
-    "test": "node scripts/test-llm-parse.mjs",
-    "test:llm-parse": "node scripts/test-llm-parse.mjs"
+    "test": "node scripts/test-llm-parse.mjs && node --test tests/*.test.mjs",
+    "test:llm-parse": "node scripts/test-llm-parse.mjs",
+    "dev:cloud": "wrangler dev --ip 127.0.0.1 --port 8788",
+    "db:local": "wrangler d1 migrations apply sensebook-personal --local",
+    "deploy:cloud": "wrangler deploy",
+    "test:cloud": "node --test tests/*.test.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.8",
@@ -21,5 +25,12 @@
     "dotenv": "^16.4.7",
     "hono": "^4.7.2",
     "jose": "^5.9.6"
+  },
+  "devDependencies": {
+    "wrangler": "^4.135.0",
+    "miniflare": "5.20260918.0-alpha"
+  },
+  "volta": {
+    "node": "22.14.0"
   }
 }

@@ -1,3 +1,19 @@
+# Sensebook · 个人阅读回顾 V1
+
+默认不登录也能翻译和保存本地查询。电脑脚本 / Android 是查询入口；个人网站负责跨设备历史与按需日、周、月回顾。
+
+新版本使用 **Cloudflare Workers + D1**，个人邮箱通过 Cloudflare Access 登录。同步需要在每台设备主动开启；模型 Key 不保存到云端。
+
+- [产品设计](docs/product-design.md) · [技术设计](docs/tech-design.md) · [HTML 设计图](docs/design.html)
+- **[本地试用、Cloudflare 部署与设备连接](docs/deployment.md)**
+- 开发：Node 22，`npm ci` → `cp .dev.vars.example .dev.vars` → `npm run db:local` → `npm run dev:cloud`
+- 网站：`http://127.0.0.1:8788`
+- 测试：`npm test`、`npm run test:cloud`
+
+原 Node MVP 仍可通过 `npm run dev` 使用，下面是旧词库模式说明。
+
+---
+
 # Sensebook
 
 浏览器优先的划词词汇工具（中文界面）。在任意网页划词 → 翻译 / 加入生词本 / 存本并释义。

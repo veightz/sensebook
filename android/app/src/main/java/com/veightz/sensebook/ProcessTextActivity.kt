@@ -11,6 +11,8 @@ import androidx.lifecycle.lifecycleScope
 import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.textfield.TextInputEditText
 import com.veightz.sensebook.data.VocabStore
+import com.veightz.sensebook.data.QueryStore
+import com.veightz.sensebook.sync.QuerySync
 import com.veightz.sensebook.databinding.ActivityProcessTextBinding
 import com.veightz.sensebook.dict.LocalDict
 import com.veightz.sensebook.llm.DeepSeekClient
@@ -58,6 +60,11 @@ class ProcessTextActivity : AppCompatActivity() {
         binding.modelSentenceGloss.text = getString(R.string.model_loading)
         binding.phoneticRow.text = formatPhoneticPos(null, null)
 
+        val historyButton = android.widget.Button(this).apply {
+            text = "查询记录与同步（可选）"
+            setOnClickListener { startActivity(Intent(this@ProcessTextActivity, HistoryActivity::class.java)) }
+        }
+        (binding.btnSaveVocab.parent as? android.view.ViewGroup)?.addView(historyButton)
         binding.btnSaveVocab.setOnClickListener { saveVocab() }
         binding.btnDeepSeekSettings.setOnClickListener { showDeepSeekSettings() }
 
@@ -81,6 +88,7 @@ class ProcessTextActivity : AppCompatActivity() {
 
     private fun runDualOut(raw: String) {
         val gen = ++queryGen
+        val eventId = QueryStore.get(applicationContext).begin(raw, sourceApp)
         val settings = DeepSeekSettings.snapshot(applicationContext)
 
         if (isShortWord) {
@@ -123,6 +131,14 @@ class ProcessTextActivity : AppCompatActivity() {
                     Result.failure(e)
                 }
             }
+            // 即便用户已切换查询，已发起的请求仍保存真实结果。
+            withContext(Dispatchers.IO) {
+                modelResult.fold(
+                    onSuccess = { result -> QueryStore.get(applicationContext).finish(eventId, listOf(result.aiWordSense, result.aiSentenceGloss).filter { it.isNotBlank() }.joinToString("\n\n"), if (result.stub) "stub" else "ready") },
+                    onFailure = { QueryStore.get(applicationContext).finish(eventId, "", "failed") }
+                )
+            }
+            QuerySync.enqueue(applicationContext)
             if (gen != queryGen) return@launch
             modelResult.fold(
                 onSuccess = { enrich ->

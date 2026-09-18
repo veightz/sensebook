@@ -3,11 +3,12 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609171620
+// @version      0.1.202609190312
 // @description  划词自动查询 / 翻译 / 加入生词本 / 存本并释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
 // @grant        GM_getValue
+// @grant        GM_listValues
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
@@ -622,6 +623,135 @@
     list.unshift(entry);
     saveEntries(list);
     return entry;
+  }
+
+  // ---- 持久查询事件：每条独立存储，不与 250 条模型缓存共享生命周期 ----
+  const EVENT_PREFIX = 'sensebook_event_v1_';
+  const SYNC_KEY = 'sensebook_personal_sync';
+  const INSTALL_KEY = 'sensebook_installation_id';
+  let historySyncBusy = false;
+  let historySyncTimer = null;
+  const activeHistoryQueries = new Map();
+  function installationId() {
+    let id = storeGet(INSTALL_KEY, '');
+    if (!id) { id = uuid(); storeSet(INSTALL_KEY, id); }
+    return id;
+  }
+  function eventKeys() {
+    try { if (typeof GM_listValues === 'function') return GM_listValues().filter(k => k.startsWith(EVENT_PREFIX)); } catch {}
+    try { return Object.keys(localStorage).filter(k => k.startsWith(EVENT_PREFIX)); } catch { return []; }
+  }
+  function allQueryEvents() {
+    return eventKeys().map(k => storeGet(k, null)).filter(e => e && !e.deleted).sort((a,b) => b.occurred_at.localeCompare(a.occurred_at));
+  }
+  function getSyncConfig() {
+    // 同步凭据绝不回退到宿主网页可读取的 localStorage。
+    try { return typeof GM_getValue === 'function' ? coerceStoreValue(GM_getValue(SYNC_KEY, null)) : null; } catch { return null; }
+  }
+  function eventExplanation(record) {
+    return [record.translation, record.ai_word_sense, record.ai_sentence_gloss].filter(Boolean).join('\n\n');
+  }
+  function beginQueryEvent(args, mode) {
+    const event = { id:uuid(), installation_id:installationId(), selected_text:args.word || args.sentence || '',
+      context:args.sentence || '', source_url:args.source_url || location.href, source_title:document.title,
+      source_app:'', platform:'userscript', mode, status:'pending', explanation:'', from_cache:false,
+      occurred_at:new Date().toISOString(), timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,
+      origin:'query', revision:uuid() };
+    storeSet(EVENT_PREFIX + event.id, event);
+    return event.id;
+  }
+  function finishQueryEvent(id, record, fromCache, error) {
+    const event = storeGet(EVENT_PREFIX + id, null);
+    if (!event || event.deleted) return;
+    const next={...event, explanation:error?'':eventExplanation(record || {}), from_cache:!!fromCache,
+      status:error?'failed':record?.stub?'stub':record?.local?'local':'ready', revision:uuid()};
+    storeSet(EVENT_PREFIX + id,next);
+    queueHistorySync();
+  }
+  function recordCompletedQuery(args, record, mode, fromCache=false) {
+    const id=beginQueryEvent(args,mode);finishQueryEvent(id,record,fromCache);return id;
+  }
+  async function recordedLookup(args,mode,operation) {
+    // 同一次选区的并发调用共享事件；之后再次遇到相同表达仍新增事件。
+    const key=selectionGen+'::'+mode+'::'+makeCacheKey(args.word,args.sentence);
+    if(activeHistoryQueries.has(key)) return activeHistoryQueries.get(key);
+    const id=beginQueryEvent(args,mode);
+    const work=(async()=>{try{const result=await operation();finishQueryEvent(id,result.record || result,result.fromCache);return result;}catch(e){finishQueryEvent(id,null,false,e);throw e;}finally{activeHistoryQueries.delete(key);}})();
+    activeHistoryQueries.set(key,work);return work;
+  }
+  async function runTranslateLookup(args) { return recordedLookup(args,'translate',()=>runTranslateLookupRaw(args)); }
+  async function runSenseLookup(args) { return recordedLookup(args,'sense',()=>runSenseLookupRaw(args)); }
+  async function enrichLocalEntry(entry) { return recordedLookup(entry,'sense',()=>enrichLocalEntryRaw(entry)); }
+  function queueHistorySync() {
+    if(historySyncTimer)clearTimeout(historySyncTimer);
+    historySyncTimer=setTimeout(()=>syncQueryHistory().catch(()=>{}),1500);
+  }
+  async function syncQueryHistory() {
+    const config=getSyncConfig();
+    if(!config?.enabled || historySyncBusy) return;
+    historySyncBusy=true;
+    try {
+      const request=async(path,body)=>{
+        const current=getSyncConfig();if(!current?.enabled || current.token!==config.token) throw new Error('同步已关闭');
+        const {data}=await gmFetch(config.endpoint+path,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+config.token},body});return data;
+      };
+      const identity=await request('/sync/me');
+      if(identity.account_id!==config.account_id || identity.device_id!==config.device_id) throw new Error('设备配置与账号不匹配');
+      const pending=allQueryEvents().filter(e=>(!e.account_id || e.account_id===config.account_id) &&
+        (config.include_history || e.occurred_at>=config.since) && e.synced_revision!==e.revision);
+      while(pending.length){
+        const batch=[];let bytes=0;
+        while(pending.length && batch.length<25){const e=pending[0];const size=new TextEncoder().encode(JSON.stringify(e)).length;if(batch.length&&bytes+size>400000)break;pending.shift();batch.push(e);bytes+=size;}
+        const result=await request('/sync/events',{events:batch});
+        for(const snapshot of batch){const e=storeGet(EVENT_PREFIX+snapshot.id,null);if(!e||e.deleted)continue;
+          if(result.deleted?.includes(e.id)){storeSet(EVENT_PREFIX+e.id,{id:e.id,deleted:true});continue;}
+          if(result.accepted?.includes(e.id))storeSet(EVENT_PREFIX+e.id,{...e,account_id:config.account_id,synced_revision:snapshot.revision});
+        }
+      }
+      // 每轮从头读取 tombstone，防止低序号记录晚删除时被游标跳过。
+      let after=0;
+      for(;;){const result=await request('/sync/deletions?after='+after);for(const e of result.deleted){storeSet(EVENT_PREFIX+e.id,{id:e.id,deleted:true});after=e.seq;}if(!result.has_more)break;}
+      if(getSyncConfig()?.token===config.token)GM_setValue(SYNC_KEY,{...getSyncConfig(),last_sync:new Date().toISOString(),error:''});
+    } catch(e) {
+      if(getSyncConfig()?.token===config.token)GM_setValue(SYNC_KEY,{...getSyncConfig(),error:e.message || '同步失败'});
+      throw e;
+    } finally {historySyncBusy=false;}
+  }
+  function importLegacyQueries() {
+    const list=[...loadEntries(),...loadQueryCache()];
+    for(const old of list){
+      const id='legacy_'+String(old.id || '').replace(/[^a-zA-Z0-9_-]/g,'');
+      if(id.length<8 || storeGet(EVENT_PREFIX+id,null))continue;
+      storeSet(EVENT_PREFIX+id,{id,installation_id:installationId(),selected_text:old.word||old.sentence||'',context:old.sentence||'',
+        explanation:eventExplanation(old),source_url:old.source_url||'',source_title:'',source_app:'',platform:'userscript',mode:'legacy',
+        status:old.stub?'stub':'ready',from_cache:false,occurred_at:old.created_at||new Date().toISOString(),timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,
+        origin:'legacy',revision:uuid()});
+    }
+  }
+  function showQueryHistoryPanel() {
+    const existing=document.getElementById('sensebook-personal-history');if(existing)existing.remove();
+    const host=document.createElement('div');host.id='sensebook-personal-history';host.style.cssText='position:fixed;inset:0;z-index:2147483647;background:#183a2855;display:grid;place-items:center;';
+    const shadow=host.attachShadow({mode:'closed'});document.documentElement.appendChild(host);
+    shadow.innerHTML=`<style>*{box-sizing:border-box}section{background:#f8faf5;color:#294936;font:14px/1.7 system-ui;width:min(740px,94vw);max-height:88vh;overflow:auto;border-radius:16px;padding:25px}header{display:flex;justify-content:space-between;align-items:center}h2{font-size:23px;margin:0}button{font:inherit;cursor:pointer;border:1px solid #d5dfcf;background:#edf2e7;color:#31593b;border-radius:7px;padding:7px 12px;margin:5px 5px 5px 0}input,textarea{box-sizing:border-box;width:100%;padding:10px;border:1px solid #d5dfcf;border-radius:6px;background:white;font:inherit;color:#294936}input[type=checkbox]{width:auto}summary{cursor:pointer;padding:12px 0}article{background:white;border:1px solid #dfe7d9;border-radius:10px;padding:16px;margin:10px 0}article strong{font:21px Georgia}p{white-space:pre-wrap;overflow-wrap:anywhere}small{color:#7d8e75}a{color:#31593b}</style><section><header><h2>查询记录</h2><button id="close">关闭</button></header><p><small>每次查询都保留语境。无需登录；同步由你选择。</small></p><input id="search" placeholder="搜索本地查询"><p id="status"></p><details id="settings"><summary>个人网站与同步（可选）</summary><p>在个人网站的「连接与设置」生成配置，再粘贴到这里。只接受你自己的站点配置。</p><textarea id="config" rows="3" placeholder="粘贴连接配置 JSON"></textarea><p><label><input id="include" type="checkbox"> 同步已有查询记录（含旧生词本和缓存导入）</label></p><button id="connect">开启同步</button><button id="sync">立即同步</button><button id="disable">关闭同步</button><button id="website">打开回顾网站</button><p><small>原句、解释、网址与设备来源会同步。模型 Key 不会上传。</small></p></details><div id="records"></div></section>`;
+    const el=id=>shadow.getElementById(id);
+    const render=()=>{const q=el('search').value.toLowerCase(),all=allQueryEvents(),list=all.filter(e=>(e.selected_text+' '+e.context+' '+e.explanation).toLowerCase().includes(q));
+      const config=getSyncConfig();el('status').textContent=`本地 ${all.length} 条 · ${config?.enabled?(config.error?'同步待重试：'+config.error:config.last_sync?'最近同步 '+new Date(config.last_sync).toLocaleString():'同步已开启'):'同步未开启'}`;
+      el('records').innerHTML=list.slice(0,80).map(e=>`<article><strong>${escapeHtml(e.selected_text)}</strong><p>${escapeHtml(e.context||'未取得完整原句')}</p><p>${escapeHtml(e.explanation||({failed:'本次查询失败',pending:'查询未完成'}[e.status]||'暂无解释'))}</p><small>${escapeHtml(new Date(e.occurred_at).toLocaleString())} · ${e.from_cache?'缓存回看':e.origin==='legacy'?'历史导入':e.status}</small></article>`).join('')+(list.length>80?'<p>仅展示最新 80 条；可搜索更早记录，全部记录仍保存在本机。</p>':'');};
+    el('close').onclick=()=>host.remove();el('search').oninput=render;
+    el('connect').onclick=async()=>{try{
+      if(typeof GM_setValue!=='function'||typeof GM_listValues!=='function')throw new Error('请通过支持 GM 存储的油猴管理器安装后再开启同步');
+      const c=JSON.parse(el('config').value),u=new URL(c.endpoint);
+      if(u.protocol!=='https:'&&!['localhost','127.0.0.1'].includes(u.hostname))throw new Error('同步站点必须使用 HTTPS');
+      if(!/^sb_[a-f0-9]{64}$/.test(c.token)||!c.account_id||!c.device_id)throw new Error('连接配置不完整');
+      const config={endpoint:u.origin,token:c.token,device_id:c.device_id,account_id:c.account_id,enabled:true,include_history:el('include').checked,since:new Date().toISOString()};
+      const {data}=await gmFetch(config.endpoint+'/sync/me',{headers:{Authorization:'Bearer '+config.token}});
+      if(data.account_id!==config.account_id||data.device_id!==config.device_id)throw new Error('连接配置验证失败');
+      if(config.include_history)importLegacyQueries();GM_setValue(SYNC_KEY,config);el('config').value='';await syncQueryHistory();render();
+    }catch(e){el('status').textContent=e.message;}};
+    el('sync').onclick=async()=>{try{await syncQueryHistory();render();}catch(e){render();}};
+    el('disable').onclick=()=>{const c=getSyncConfig();if(c)GM_setValue(SYNC_KEY,{...c,enabled:false});render();};
+    el('website').onclick=()=>{const c=getSyncConfig();if(c?.endpoint)window.open(c.endpoint,'_blank','noopener,noreferrer');else el('status').textContent='先粘贴个人网站生成的连接配置。';};
+    render();
   }
 
   // ---- query cache (local lookup history; LRU by updated_at) ----
@@ -2031,7 +2161,7 @@
     }
   }
 
-  function showQueryHistoryPanel(filterText) {
+  function showLegacyQueryHistoryPanel(filterText) {
     hidePanel();
     const q = String(filterText || '').trim().toLowerCase();
     let entries = loadQueryCache();
@@ -2614,7 +2744,7 @@
   }
 
   /** Enrich one entry: real LLM if key set, else stub. */
-  async function enrichLocalEntry(entry) {
+  async function enrichLocalEntryRaw(entry) {
     if (!hasLlmConfig()) {
       const stub = clientStubEnrich(entry.word, entry.sentence);
       return { ...stub, stub: true };
@@ -2677,7 +2807,7 @@
    * Lightweight translate lookup with cache + in-flight dedupe.
    * Does not set global busy. Caller must check selectionGen / reqId for stale.
    */
-  async function runTranslateLookup({ word, sentence, source_url, forceRefresh }) {
+  async function runTranslateLookupRaw({ word, sentence, source_url, forceRefresh }) {
     const text = word || sentence;
     if (!text) throw new Error('没有可翻译文本');
     const cacheKey = makeCacheKey(word, sentence);
@@ -2732,7 +2862,7 @@
    * Contextual 词义/搭配效果 lookup (same enrich prompt as 存本并释义).
    * Does not write vocab. Caller handles display / optional save.
    */
-  async function runSenseLookup({ word, sentence, source_url, forceRefresh }) {
+  async function runSenseLookupRaw({ word, sentence, source_url, forceRefresh }) {
     if (!word && !sentence) throw new Error('没有可释义文本');
     const cacheKey = makeCacheKey(word, sentence);
     if (!forceRefresh) {
@@ -2808,6 +2938,7 @@
       }
 
       if (!hasLlmConfig() && !hasOptionalApi()) {
+        recordCompletedQuery({word,sentence,source_url:location.href},{translation:localHit?.gloss||'',local:true},'translate');
         if (localHit) {
           // Local-only OK; light hint for model
           setModelRow('已显示本地词库；配置 DeepSeek 后可并行补全', 'hint');
@@ -2878,6 +3009,7 @@
         if (reqId !== selectionGen) return;
 
         if (cacheHit && (cacheHit.ai_word_sense || cacheHit.ai_sentence_gloss)) {
+          recordCompletedQuery({word,sentence,source_url:location.href},cacheHit,'sense',true);
           setSenseGlossResult({
             ai_word_sense: cacheHit.ai_word_sense,
             ai_sentence_gloss: cacheHit.ai_sentence_gloss,
@@ -2969,12 +3101,14 @@
       if (reqId !== selectionGen) return;
 
       if (cacheHit && cacheHit.translation) {
+        recordCompletedQuery({word,sentence,source_url:location.href},cacheHit,'translate',true);
         setModelRow(formatTranslateResult(cacheHit) || '(空)', 'cache');
         // Still keep local row if present; no forced network refresh.
         return;
       }
 
       if (!hasLlmConfig()) {
+        recordCompletedQuery({word,sentence,source_url:location.href},{translation:localHit?.gloss||'',local:true},'translate');
         if (localHit) {
           setModelRow('本地词库已命中；配置 DeepSeek 后可并行显示模型译文', 'hint');
         } else {
@@ -3899,6 +4033,7 @@
       gmMenu('Sensebook：我的生词本（本地）', () => {
         showLocalPanel();
       });
+      gmMenu('Sensebook：个人网站与同步（可选）', () => { showQueryHistoryPanel(); });
       gmMenu('Sensebook：查询记录', () => {
         showQueryHistoryPanel();
       });
@@ -4005,6 +4140,9 @@
     }, { once: true });
   }
   registerSensebookMenus();
+  queueHistorySync();
+  window.addEventListener('online', queueHistorySync);
+  setInterval(() => { if (!document.hidden) queueHistorySync(); }, 60000);
   try { ensureLocalDict(); } catch { /* ignore */ }
   startFabWatchdog();
 

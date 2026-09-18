@@ -1,3 +1,13 @@
+# Android V1 更新
+
+新增启动图标“Sensebook”，可查看本地查询、粘贴网站设备连接配置、选择导入历史、开启/关闭同步和打开回顾网站。系统划词入口继续可免登录使用。
+
+记录独立保存到 SQLite，完成解释后异步同步，不阻塞翻译展示。API Key 与同步凭据分别加密保存，并排除系统云备份。
+
+部署和安装见 [个人版说明](../docs/deployment.md)。以下是原划词 MVP 的历史说明。
+
+---
+
 # Sensebook Android
 
 Package: `com.veightz.sensebook` · `versionName` **0.1.1**  
