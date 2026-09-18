@@ -1,6 +1,14 @@
 import { Hono } from "hono";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { bodyLimit } from "hono/body-limit";
+import {
+  sealApiKey,
+  openApiKey,
+  profileMetadata,
+  profileFields,
+  reviewEndpoint,
+  defaultProfile,
+} from "./model-profiles.js";
 
 const app = new Hono();
 const keysets = new Map();
@@ -172,7 +180,7 @@ app.delete("/api/devices/:id", async (c) => {
   return c.json({ ok: true });
 });
 
-// 设备凭据仅用于同步，不能读取其他设备、管理账号或消耗模型费用。
+// 设备凭据可同步记录及读取账号默认模型配置，不能管理账号或通过代理消耗模型费用。
 app.use("/sync/*", async (c, next) => {
   const token = (c.req.header("Authorization") || "").replace(/^Bearer /, "");
   if (!/^sb_[0-9a-f]{64}$/.test(token)) throw bad("设备未连接", 401);
@@ -191,6 +199,105 @@ app.get("/sync/me", (c) =>
     device_id: c.get("device").id,
   }),
 );
+// 模型配置列表不返回密文或明文 Key，只有绑定的查询设备能获取默认项。
+app.get("/api/model-profiles", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    "SELECT * FROM model_profiles WHERE user_id=? ORDER BY is_default DESC,updated_at DESC",
+  )
+    .bind(c.get("user").id)
+    .all();
+  return c.json({ profiles: results.map(profileMetadata) });
+});
+async function saveProfile(c) {
+  const user = c.get("user").id,
+    id = c.req.param("id") || crypto.randomUUID(),
+    body = await c.req.json();
+  const old = c.req.param("id")
+    ? await c.env.DB.prepare(
+        "SELECT * FROM model_profiles WHERE id=? AND user_id=?",
+      )
+        .bind(id, user)
+        .first()
+    : null;
+  if (c.req.param("id") && !old) throw bad("模型配置不存在", 404);
+  const f = profileFields(body);
+  if (!old && !f.api_key) throw bad("新配置需要填写 API Key");
+  // 变更供应商地址时必须重新填写 Key，避免把旧供应商的密钥发送到新地址。
+  if (old && old.base_url !== f.base_url && !f.api_key)
+    throw bad("更换 Base URL 时请重新填写对应的 API Key");
+  const cipher = f.api_key
+    ? await sealApiKey(c.env, user, id, f.api_key)
+    : old.api_key_ciphertext;
+  const hint = f.api_key
+    ? "••••" + (f.api_key.length > 8 ? f.api_key.slice(-4) : "")
+    : old.key_hint;
+  const current = await defaultProfile(c.env.DB, user),
+    isDefault = body.is_default || old?.is_default || !current;
+  const statements = [];
+  if (isDefault)
+    statements.push(
+      c.env.DB.prepare(
+        "UPDATE model_profiles SET is_default=0 WHERE user_id=?",
+      ).bind(user),
+    );
+  statements.push(
+    c.env.DB.prepare(
+      `INSERT INTO model_profiles(id,user_id,name,base_url,model,api_key_ciphertext,key_hint,thinking,is_default,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,base_url=excluded.base_url,model=excluded.model,api_key_ciphertext=excluded.api_key_ciphertext,key_hint=excluded.key_hint,thinking=excluded.thinking,is_default=excluded.is_default,updated_at=excluded.updated_at`,
+    ).bind(
+      id,
+      user,
+      f.name,
+      f.base_url,
+      f.model,
+      cipher,
+      hint,
+      f.thinking,
+      isDefault ? 1 : 0,
+      now(),
+    ),
+  );
+  await c.env.DB.batch(statements);
+  return c.json({ ok: true, id });
+}
+app.post("/api/model-profiles", saveProfile);
+app.put("/api/model-profiles/:id", saveProfile);
+app.post("/api/model-profiles/:id/default", async (c) => {
+  const user = c.get("user").id,
+    id = c.req.param("id");
+  if (
+    !(await c.env.DB.prepare(
+      "SELECT id FROM model_profiles WHERE user_id=? AND id=?",
+    )
+      .bind(user, id)
+      .first())
+  )
+    throw bad("模型配置不存在", 404);
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      "UPDATE model_profiles SET is_default=0 WHERE user_id=?",
+    ).bind(user),
+    c.env.DB.prepare(
+      "UPDATE model_profiles SET is_default=1,updated_at=? WHERE user_id=? AND id=?",
+    ).bind(now(), user, id),
+  ]);
+  return c.json({ ok: true });
+});
+app.delete("/api/model-profiles/:id", async (c) => {
+  await c.env.DB.prepare("DELETE FROM model_profiles WHERE user_id=? AND id=?")
+    .bind(c.get("user").id, c.req.param("id"))
+    .run();
+  return c.json({ ok: true });
+});
+app.get("/sync/model-config", async (c) => {
+  const row = await defaultProfile(c.env.DB, c.get("device").user_id);
+  return c.json({
+    profile: row
+      ? { ...profileMetadata(row), api_key: await openApiKey(c.env, row) }
+      : null,
+  });
+});
+
 function cleanEvent(e) {
   if (
     !e ||
@@ -415,15 +522,31 @@ app.post("/api/review", async (c) => {
     p = period(body),
     input = await reviewInput(c, p);
   if (!input.events.length) throw bad("这段时间还没有查询记录");
-  const key = str(body.api_key, 500).trim(),
-    model = str(body.model, 80) || "deepseek-chat";
-  if (!key || /[\r\n]/.test(key))
-    throw bad("请在当前浏览器填写 DeepSeek API Key");
-  if (!/^[a-zA-Z0-9._-]+$/.test(model)) throw bad("模型名称不正确");
-  // 仅转发至固定供应商，拒绝把用户 Key 发给任意 URL；不记录 Key 或上游正文。
+  let key, model, endpoint;
+  if (body.profile_id || !body.api_key) {
+    const row = body.profile_id
+      ? await c.env.DB.prepare(
+          "SELECT * FROM model_profiles WHERE id=? AND user_id=?",
+        )
+          .bind(body.profile_id, c.get("user").id)
+          .first()
+      : await defaultProfile(c.env.DB, c.get("user").id);
+    if (!row) throw bad("请先在设置中保存账号模型配置，或填写本机临时 Key");
+    endpoint = reviewEndpoint(c.env, row.base_url);
+    key = await openApiKey(c.env, row);
+    model = row.model;
+  } else {
+    key = str(body.api_key, 4000).trim();
+    model = str(body.model, 100) || "deepseek-chat";
+    endpoint = "https://api.deepseek.com/chat/completions";
+  }
+  if (!key || /[\r\n]/.test(key)) throw bad("API Key 格式不正确");
+  if (!model || /[\r\n]/.test(model)) throw bad("模型名称不正确");
+  // 密钥仅在请求内解密，禁止跨站重定向携带密钥。
   let response;
   try {
-    response = await fetch("https://api.deepseek.com/chat/completions", {
+    response = await fetch(endpoint, {
+      redirect: "error",
       method: "POST",
       headers: {
         "Content-Type": "application/json",

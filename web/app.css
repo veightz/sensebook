@@ -791,3 +791,45 @@ textarea:focus-visible {
     padding: 24px;
   }
 }
+
+select {
+  font: inherit;
+  color: inherit;
+  background: #fff;
+  border: 1px solid var(--line);
+  padding: 8px;
+  border-radius: 6px;
+  max-width: 260px;
+}
+.profile-row {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.profile-row .tag {
+  margin-left: 8px;
+}
+.profile-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.check-label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.check-label input {
+  width: auto;
+  margin: 0;
+}
+#local-model-settings {
+  margin-top: 24px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}

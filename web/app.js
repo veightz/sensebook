@@ -211,7 +211,7 @@ function renderReview(data) {
     : "✧ 生成回顾";
   $("generation-hint").textContent = data.stale
     ? "本期记录已变化，可以更新回顾"
-    : "使用你自己的 DeepSeek Key";
+    : "使用所选模型生成，不会重复调用已保存的回顾";
   $("source-list").innerHTML = data.events
     .map(
       (e) =>
@@ -258,9 +258,11 @@ $("source-list").onclick = (e) => {
 };
 $("generate-review").onclick = run(async () => {
   const key = $("api-key").value.trim();
-  if (!key) {
+  const profileId = $("review-model").value;
+  if ((!profileId || profileId === "__local__") && !key) {
     notice("请先在「连接与设置」填写当前浏览器的 DeepSeek Key。");
     tab("settings");
+    $("local-model-settings").open = true;
     $("api-key").focus();
     return;
   }
@@ -268,11 +270,14 @@ $("generate-review").onclick = run(async () => {
     request = ++state.reviewRequest;
   $("generate-review").disabled = true;
   $("generate-review").textContent = "正在生成，请稍候…";
-  notice("正在使用你的 Key 生成回顾。查询内容将发送至 DeepSeek。");
+  notice("正在使用所选模型生成回顾，查询内容会发送给对应模型服务。");
   try {
     const data = await api("/review", {
       method: "POST",
-      body: { ...p, api_key: key, model: $("model").value.trim() },
+      body:
+        profileId && profileId !== "__local__"
+          ? { ...p, profile_id: profileId }
+          : { ...p, api_key: key, model: $("model").value.trim() },
     });
     if (request === state.reviewRequest) renderReview(data);
     notice("回顾已保存，其他设备登录后也能阅读。");
@@ -347,12 +352,112 @@ $("logout").onclick = run(async () => {
   $("api-key").value = "";
   location.assign("/");
 });
+let profiles = [];
+async function loadProfiles() {
+  const data = await api("/model-profiles");
+  profiles = data.profiles;
+  $("profiles").innerHTML = profiles.length
+    ? profiles
+        .map(
+          (p) =>
+            `<div class="profile-row"><div><strong>${esc(p.name)}</strong>${p.is_default ? '<span class="tag">默认模型</span>' : ""}<p class="meta">${esc(p.model)} · ${esc(p.key_hint)}<br>${esc(p.base_url)}</p></div><div class="profile-actions">${p.is_default ? "" : `<button class="quiet" data-default="${esc(p.id)}">设为默认</button>`}<button class="quiet" data-edit="${esc(p.id)}">编辑</button><button class="quiet danger" data-delete-profile="${esc(p.id)}">删除</button></div></div>`,
+        )
+        .join("")
+    : '<p class="meta">还没有账号模型配置。保存后，新设备就不用再填写 Key。</p>';
+  const selected = $("review-model").value;
+  $("review-model").innerHTML =
+    profiles
+      .map(
+        (p) =>
+          `<option value="${esc(p.id)}">${esc(p.name)}${p.is_default ? "（账号默认）" : ""}</option>`,
+      )
+      .join("") + '<option value="__local__">本机临时 Key（DeepSeek）</option>';
+  $("review-model").value = profiles.some((p) => p.id === selected)
+    ? selected
+    : profiles.find((p) => p.is_default)?.id || "__local__";
+}
+function resetProfileForm() {
+  $("profile-form").reset();
+  $("profile-id").value = "";
+  $("profile-base").value = "https://api.deepseek.com/v1";
+  $("profile-model").value = "deepseek-chat";
+  $("save-profile").textContent = "加密保存到账号";
+}
+$("reset-profile").onclick = resetProfileForm;
+$("profile-form").onsubmit = run(async (e) => {
+  e.preventDefault();
+  const id = $("profile-id").value,
+    b = $("save-profile");
+  b.disabled = true;
+  try {
+    await api("/model-profiles" + (id ? "/" + encodeURIComponent(id) : ""), {
+      method: id ? "PUT" : "POST",
+      body: {
+        name: $("profile-name").value,
+        base_url: $("profile-base").value,
+        model: $("profile-model").value,
+        api_key: $("profile-key").value,
+        thinking: $("profile-thinking").checked,
+        is_default: $("profile-default").checked,
+      },
+    });
+    resetProfileForm();
+    await loadProfiles();
+    notice(
+      "模型配置已加密保存。跟随账号默认模型的设备将在下次连接时自动更新。",
+    );
+  } finally {
+    b.disabled = false;
+  }
+});
+$("profiles").onclick = run(async (e) => {
+  const edit = e.target.closest("[data-edit]"),
+    def = e.target.closest("[data-default]"),
+    del = e.target.closest("[data-delete-profile]");
+  if (edit) {
+    const p = profiles.find((p) => p.id === edit.dataset.edit);
+    $("profile-id").value = p.id;
+    $("profile-name").value = p.name;
+    $("profile-base").value = p.base_url;
+    $("profile-model").value = p.model;
+    $("profile-key").value = "";
+    $("profile-thinking").checked = p.thinking;
+    $("profile-default").checked = p.is_default;
+    $("save-profile").textContent = "保存配置修改";
+    $("profile-name").focus();
+  }
+  if (def) {
+    await api(
+      "/model-profiles/" + encodeURIComponent(def.dataset.default) + "/default",
+      { method: "POST" },
+    );
+    $("review-model").value = "";
+    await loadProfiles();
+    notice("默认模型已更新。");
+  }
+  if (
+    del &&
+    confirm(
+      "删除这份账号模型配置？使用它的设备将在下次连接时清除云端下发的配置；离线设备无法立即清除。",
+    )
+  ) {
+    await api(
+      "/model-profiles/" + encodeURIComponent(del.dataset.deleteProfile),
+      { method: "DELETE" },
+    );
+    if ($("profile-id").value === del.dataset.deleteProfile) resetProfileForm();
+    await loadProfiles();
+    notice("账号配置已删除。");
+  }
+});
+
 try {
   const user = await api("/me");
   $("identity").textContent = user.email;
   $("workspace").hidden = false;
   if (user.local) notice("本地预览模式：数据保存在本机，尚未连接 Cloudflare。");
   await loadHistory();
+  await loadProfiles();
 } catch (e) {
   $("signed-out").hidden = false;
   notice(e.message, true);

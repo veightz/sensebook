@@ -85,6 +85,10 @@
               </div>
             </div>
             <div class="review-controls">
+              <label class="date-label"
+                >生成模型
+                <select id="review-model" aria-label="生成模型"></select
+              ></label>
               <div class="segmented" aria-label="回顾周期">
                 <button data-kind="day" class="active">每日</button
                 ><button data-kind="week">每周</button
@@ -106,7 +110,7 @@
                   <button id="generate-review" class="primary">
                     ✧ 生成回顾</button
                   ><span class="meta" id="generation-hint"
-                    >使用你自己的 DeepSeek Key</span
+                    >使用账号模型配置</span
                   >
                 </div>
               </article>
@@ -122,40 +126,95 @@
               <div>
                 <span class="eyebrow">YOUR SPACE, YOUR CHOICE</span>
                 <h1>连接你的阅读日常。</h1>
-                <p>只连接你想同步的设备，Key 留在当前浏览器。</p>
+                <p>模型配置随账号走，查询记录同步由你选择。</p>
               </div>
             </div>
             <div class="settings-grid">
               <section class="setting-card">
-                <h2>模型与回顾</h2>
+                <h2>账号模型配置</h2>
                 <p>
-                  回顾按需生成。Key 临时经过本站转发至
-                  DeepSeek，不写入云端数据库或日志。
+                  保存多个 OpenAI 兼容配置，选择一个默认模型。API Key
+                  加密保存在账号下，新设备连接后自动配置，无需重复复制。
                 </p>
-                <form id="model-form">
+                <div id="profiles"></div>
+                <form id="profile-form">
+                  <input id="profile-id" type="hidden" />
                   <label
-                    >DeepSeek API Key<input
-                      id="api-key"
+                    >配置名称<input
+                      id="profile-name"
+                      placeholder="例如：日常阅读 · DeepSeek"
+                      maxlength="80"
+                      required
+                  /></label>
+                  <label
+                    >Base URL<input
+                      id="profile-base"
+                      type="url"
+                      value="https://api.deepseek.com/v1"
+                      required
+                  /></label>
+                  <label
+                    >模型名称<input
+                      id="profile-model"
+                      value="deepseek-chat"
+                      maxlength="100"
+                      required
+                  /></label>
+                  <label
+                    >API Key<input
+                      id="profile-key"
                       type="password"
                       autocomplete="off"
-                      placeholder="输入当前浏览器使用的 Key" /></label
-                  ><label
-                    >模型名称<input
-                      id="model"
-                      value="deepseek-chat"
-                      autocomplete="off" /></label
-                  ><button class="primary" type="submit">
-                    保存到当前标签页</button
-                  ><button class="quiet" id="clear-key" type="button">
-                    清除 Key</button
-                  ><small>关闭标签页后需重新填写。不会读取脚本中的 Key。</small>
+                      placeholder="新配置必填；编辑时留空保留原 Key"
+                  /></label>
+                  <label class="check-label"
+                    ><input id="profile-thinking" type="checkbox" />
+                    查询端启用思考模式</label
+                  >
+                  <label class="check-label"
+                    ><input id="profile-default" type="checkbox" />
+                    设为账号默认模型</label
+                  >
+                  <button class="primary" type="submit" id="save-profile">
+                    加密保存到账号
+                  </button>
+                  <button class="quiet" type="button" id="reset-profile">
+                    新增配置 / 取消编辑
+                  </button>
+                  <small
+                    >网站默认支持 DeepSeek、OpenAI 回顾。自定义 HTTPS
+                    接口可同步到查询端；云端回顾需站点允许该服务地址。</small
+                  >
                 </form>
+                <details id="local-model-settings">
+                  <summary>仅在当前标签页临时使用 Key</summary>
+                  <form id="model-form">
+                    <label
+                      >DeepSeek API Key<input
+                        id="api-key"
+                        type="password"
+                        autocomplete="off"
+                        placeholder="输入当前浏览器使用的 Key" /></label
+                    ><label
+                      >模型名称<input
+                        id="model"
+                        value="deepseek-chat"
+                        autocomplete="off" /></label
+                    ><button class="primary" type="submit">
+                      保存到当前标签页</button
+                    ><button class="quiet" id="clear-key" type="button">
+                      清除 Key</button
+                    ><small
+                      >关闭标签页后需重新填写。不会读取脚本中的 Key。</small
+                    >
+                  </form>
+                </details>
               </section>
               <section class="setting-card">
                 <h2>连接查询设备</h2>
                 <p>
                   在下方生成连接配置，再粘贴到脚本的「个人网站与同步」或 Android
-                  的「查询记录与同步」。同步前可选择是否上传已有记录。
+                  的「查询记录与同步」。新连接默认获取账号模型配置；查询记录上传可单独关闭。
                 </p>
                 <form id="device-form">
                   <label

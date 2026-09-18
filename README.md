@@ -2,7 +2,7 @@
 
 默认不登录也能翻译和保存本地查询。电脑脚本 / Android 是查询入口；个人网站负责跨设备历史与按需日、周、月回顾。
 
-新版本使用 **Cloudflare Workers + D1**，个人邮箱通过 Cloudflare Access 登录。同步需要在每台设备主动开启；模型 Key 不保存到云端。
+新版本使用 **Cloudflare Workers + D1**，个人邮箱通过 Cloudflare Access 登录。同步需要在每台设备主动开启；可在账号设置保存多份模型配置，Key 加密存储，新连接设备自动应用默认配置；模型同步与查询上传独立控制。
 
 - [产品设计](docs/product-design.md) · [技术设计](docs/tech-design.md) · [HTML 设计图](docs/design.html)
 - **[本地试用、Cloudflare 部署与设备连接](docs/deployment.md)**
@@ -85,7 +85,7 @@ Chrome 138+ 需要单独打开油猴的用户脚本权限，否则脚本显示�
 
 ## 配置真实「存本并释义」（DeepSeek）
 
-「存本并释义」走油猴 **直连** DeepSeek 的 OpenAI 兼容接口（`GM_xmlhttpRequest` → `{base}/chat/completions`），**不经过** Sensebook 服务器。Key 仅保存在本机油猴存储。当前 P0 **仅支持 DeepSeek**。
+「存本并释义」走油猴 **直连** DeepSeek 的 OpenAI 兼容接口（`GM_xmlhttpRequest` → `{base}/chat/completions`），**不经过** Sensebook 服务器。手工配置的 Key 保存在本机油猴存储；账号配置可加密存云端并同步到本机。当前 P0 **仅支持 DeepSeek**。
 
 1. 打开油猴菜单 **「Sensebook：LLM 设置」**，或使用划词弹层 **DeepSeek** 按钮、词库面板顶部 **配置 DeepSeek**、右下角 Sensebook FAB，弹出页内设置面板（Shadow DOM）。
 2. 面板字段：
@@ -100,7 +100,7 @@ Chrome 138+ 需要单独打开油猴的用户脚本权限，否则脚本显示�
 
 未配置 Key 时「存本并释义」仍走本地 stub，本地加入生词本不受影响。配置好后划词点 **存本并释义**，成功则 `status=ready`；失败保留词条且 `status=failed`。
 
-> **安全提醒**：API Key 只存在你本机的油猴/`GM_setValue` 中，请勿提交到仓库或发给他人。
+> **安全提醒**：本机 API Key 使用油猴/`GM_setValue` 私有存储；选择账号配置时云端另存加密副本，请勿提交到仓库或发给他人。
 
 可选同步用的「登录/同步 — API 地址 / Token」与 LLM 设置相互独立，不要混填到本面板。
 

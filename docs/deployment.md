@@ -12,6 +12,7 @@
 ```sh
 npm ci
 cp .dev.vars.example .dev.vars
+node scripts/init-local-key.mjs
 npm run db:local
 npm run dev:cloud
 ```
@@ -26,7 +27,7 @@ npm run dev:cloud
 3. 运行 `npx wrangler d1 migrations apply sensebook-personal --remote`。
 4. 在 Cloudflare Zero Trust 启用 Free 方案。配置 One-time PIN 身份提供方，创建 Self-hosted Access 应用，**仅保护最终站点域名的 `/login` 路径**（不要保护全部路径，否则脚本和 Android 的设备同步请求会被拦截）。Allow 策略只 Include 个人邮箱。会话时长建议 24 小时。
 5. 把 Access 团队域名（如 `my-team.cloudflareaccess.com`，不含 https）、应用 AUD、允许的邮箱填入 wrangler.jsonc 的 ACCESS_TEAM_DOMAIN / ACCESS_AUD / OWNER_EMAIL。
-6. `npm run deploy:cloud`，使用返回的 workers.dev 地址。若账号后台不支持为该免费地址配置 Access 路径，使用已有 Cloudflare 自定义域名；不要因此购买域名或升级付费方案。
+6. 先通过 Cloudflare Secret 设置 `MODEL_CONFIG_KEY`（随机 32 字节的 Base64，勿使用本地开发密钥）：`openssl rand -base64 32 | npx wrangler secret put MODEL_CONFIG_KEY`。妥善备份此密钥；直接替换会导致已有配置无法解密，轮换需先完成数据重加密。再执行 `npm run deploy:cloud`，使用返回的 workers.dev 地址。若账号后台不支持为该免费地址配置 Access 路径，使用已有 Cloudflare 自定义域名；不要因此购买域名或升级付费方案。
 7. 正式域名访问 `/login`，验证邮箱后跳回网站。`/api/me` 必须在未登录时返回 401；设备凭据只能访问 `/sync/*`。
 
 默认部署配置没有 DEV_AUTH，缺少 Access 配置时 API 返回 503，不会以开发身份开放数据。不要将 `.dev.vars` 内容复制为生产环境变量。
@@ -36,8 +37,8 @@ npm run dev:cloud
 1. 安装/更新当前分支的 `userscript/sensebook.user.js`。没有合入 main 前，GitHub main 安装链接仍是旧版。
 2. 网站“连接与设置”输入设备名，生成连接配置；每个安装实例单独生成一份。
 3. 油猴菜单“个人网站与同步（可选）”→ 展开设置 → 粘贴配置。
-4. 默认只同步开启后的新查询；勾选“同步已有查询”才导入已有事件、生词本和缓存。历史导入无法恢复真实查询次数。
-5. 点击“开启同步”。之后新查询自动上传，联网或前台每分钟重试；可随时关闭。
+4. 新连接默认同步账号默认模型，查询记录上传默认关闭，可分别勾选。开启记录上传后默认只同步开启后的新查询；勾选“同步已有查询”才导入已有事件、生词本和缓存。历史导入无法恢复真实查询次数。
+5. 点击“连接账号并应用设置”。启用记录同步后，新查询自动上传，联网或前台每分钟重试；可随时关闭。
 
 旧生词本及旧 Node 同步设置保留兼容，不会被新模式自动删除或启用。网站登录不等于开启任何设备同步。
 
@@ -55,10 +56,10 @@ PROCESS_TEXT 通常没有完整原句与网址，因此原始 context 留空，�
 
 ## 回顾
 
-当前版本支持 DeepSeek，Key 只存当前网页的 sessionStorage，正常关闭标签页后清除（浏览器恢复会话可能恢复 sessionStorage）；可主动“清除 Key”。不读取或上传油猴/Android 模型设置。
+网站设置支持多份 OpenAI 兼容模型配置，Key 以 AES-256-GCM 密文保存到 D1，解密密钥独立置于 Worker Secret。网页列表只返回掩码；回顾通过配置 ID 使用云端 Key。脚本和 Android 连接后自动获取默认配置，也可关闭模型同步。手工修改本机模型会暂停自动跟随。仍保留当前标签页 sessionStorage 临时 Key 模式。
 日期按当前浏览器时区分组，周从周一开始，月按自然月。已有回顾直接阅读；新查询到达后提示可更新。
 单次回顾上限 500 条 / 140,000 字符，超出时明确要求缩小期间，不静默遗漏记录。超过限制的整月回顾及分层归纳属于后续迭代。
-Key 临时经过自己的 Worker，仅请求固定 DeepSeek 端点；不写数据库、请求日志或缓存。真实模型费用由用户自己的 Key 承担。
+回顾时 Key 在 Worker 请求内解密；默认允许 DeepSeek/OpenAI，其他供应商需设置 `MODEL_PROXY_ORIGINS`（逗号分隔 HTTPS origin）。不记录 Key 或上游错误正文，禁止请求重定向。真实模型费用由用户自己的 Key 承担。
 
 ## 数据删除与设备管理
 

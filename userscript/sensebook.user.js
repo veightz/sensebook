@@ -682,6 +682,26 @@
   async function runTranslateLookup(args) { return recordedLookup(args,'translate',()=>runTranslateLookupRaw(args)); }
   async function runSenseLookup(args) { return recordedLookup(args,'sense',()=>runSenseLookupRaw(args)); }
   async function enrichLocalEntry(entry) { return recordedLookup(entry,'sense',()=>enrichLocalEntryRaw(entry)); }
+  const CLOUD_MODEL_KEY = 'sensebook_account_model';
+  async function syncAccountModel(request,config) {
+    if(config.model_sync===false)return;
+    const {profile}=await request('/sync/model-config');
+    const current=getSyncConfig();
+    if(!current?.enabled || current.token!==config.token || current.model_sync===false)return;
+    const old=storeGet(CLOUD_MODEL_KEY,null);
+    if(!profile){
+      if(old){GM_setValue(LLM_API_KEY_KEY,'');GM_setValue(CLOUD_MODEL_KEY,null);saveQueryCache([]);}
+      return;
+    }
+    if(old?.id===profile.id && old?.updated_at===profile.updated_at && old?.account_id===config.account_id)return;
+    // 只写 GM 私有空间，不能回退到宿主网页的 localStorage。
+    GM_setValue(LLM_BASE_URL_KEY,profile.base_url);
+    GM_setValue(LLM_API_KEY_KEY,profile.api_key);
+    GM_setValue(LLM_MODEL_KEY,profile.model);
+    GM_setValue(LLM_THINKING_KEY,!!profile.thinking);
+    GM_setValue(CLOUD_MODEL_KEY,{id:profile.id,name:profile.name,updated_at:profile.updated_at,account_id:config.account_id});
+    saveQueryCache([]);
+  }
   function queueHistorySync() {
     if(historySyncTimer)clearTimeout(historySyncTimer);
     historySyncTimer=setTimeout(()=>syncQueryHistory().catch(()=>{}),1500);
@@ -697,6 +717,8 @@
       };
       const identity=await request('/sync/me');
       if(identity.account_id!==config.account_id || identity.device_id!==config.device_id) throw new Error('设备配置与账号不匹配');
+      try{await syncAccountModel(request,config);if(getSyncConfig()?.token===config.token)GM_setValue(SYNC_KEY,{...getSyncConfig(),model_error:''});}catch(e){if(getSyncConfig()?.token===config.token)GM_setValue(SYNC_KEY,{...getSyncConfig(),model_error:e.message||'模型配置同步失败'});}
+      if(config.sync_records!==false){
       const pending=allQueryEvents().filter(e=>(!e.account_id || e.account_id===config.account_id) &&
         (config.include_history || e.occurred_at>=config.since) && e.synced_revision!==e.revision);
       while(pending.length){
@@ -711,6 +733,7 @@
       // 每轮从头读取 tombstone，防止低序号记录晚删除时被游标跳过。
       let after=0;
       for(;;){const result=await request('/sync/deletions?after='+after);for(const e of result.deleted){storeSet(EVENT_PREFIX+e.id,{id:e.id,deleted:true});after=e.seq;}if(!result.has_more)break;}
+      }
       if(getSyncConfig()?.token===config.token)GM_setValue(SYNC_KEY,{...getSyncConfig(),last_sync:new Date().toISOString(),error:''});
     } catch(e) {
       if(getSyncConfig()?.token===config.token)GM_setValue(SYNC_KEY,{...getSyncConfig(),error:e.message || '同步失败'});
@@ -732,21 +755,21 @@
     const existing=document.getElementById('sensebook-personal-history');if(existing)existing.remove();
     const host=document.createElement('div');host.id='sensebook-personal-history';host.style.cssText='position:fixed;inset:0;z-index:2147483647;background:#183a2855;display:grid;place-items:center;';
     const shadow=host.attachShadow({mode:'closed'});document.documentElement.appendChild(host);
-    shadow.innerHTML=`<style>*{box-sizing:border-box}section{background:#f8faf5;color:#294936;font:14px/1.7 system-ui;width:min(740px,94vw);max-height:88vh;overflow:auto;border-radius:16px;padding:25px}header{display:flex;justify-content:space-between;align-items:center}h2{font-size:23px;margin:0}button{font:inherit;cursor:pointer;border:1px solid #d5dfcf;background:#edf2e7;color:#31593b;border-radius:7px;padding:7px 12px;margin:5px 5px 5px 0}input,textarea{box-sizing:border-box;width:100%;padding:10px;border:1px solid #d5dfcf;border-radius:6px;background:white;font:inherit;color:#294936}input[type=checkbox]{width:auto}summary{cursor:pointer;padding:12px 0}article{background:white;border:1px solid #dfe7d9;border-radius:10px;padding:16px;margin:10px 0}article strong{font:21px Georgia}p{white-space:pre-wrap;overflow-wrap:anywhere}small{color:#7d8e75}a{color:#31593b}</style><section><header><h2>查询记录</h2><button id="close">关闭</button></header><p><small>每次查询都保留语境。无需登录；同步由你选择。</small></p><input id="search" placeholder="搜索本地查询"><p id="status"></p><details id="settings"><summary>个人网站与同步（可选）</summary><p>在个人网站的「连接与设置」生成配置，再粘贴到这里。只接受你自己的站点配置。</p><textarea id="config" rows="3" placeholder="粘贴连接配置 JSON"></textarea><p><label><input id="include" type="checkbox"> 同步已有查询记录（含旧生词本和缓存导入）</label></p><button id="connect">开启同步</button><button id="sync">立即同步</button><button id="disable">关闭同步</button><button id="website">打开回顾网站</button><p><small>原句、解释、网址与设备来源会同步。模型 Key 不会上传。</small></p></details><div id="records"></div></section>`;
+    shadow.innerHTML=`<style>*{box-sizing:border-box}section{background:#f8faf5;color:#294936;font:14px/1.7 system-ui;width:min(740px,94vw);max-height:88vh;overflow:auto;border-radius:16px;padding:25px}header{display:flex;justify-content:space-between;align-items:center}h2{font-size:23px;margin:0}button{font:inherit;cursor:pointer;border:1px solid #d5dfcf;background:#edf2e7;color:#31593b;border-radius:7px;padding:7px 12px;margin:5px 5px 5px 0}input,textarea{box-sizing:border-box;width:100%;padding:10px;border:1px solid #d5dfcf;border-radius:6px;background:white;font:inherit;color:#294936}input[type=checkbox]{width:auto}summary{cursor:pointer;padding:12px 0}article{background:white;border:1px solid #dfe7d9;border-radius:10px;padding:16px;margin:10px 0}article strong{font:21px Georgia}p{white-space:pre-wrap;overflow-wrap:anywhere}small{color:#7d8e75}a{color:#31593b}</style><section><header><h2>查询记录</h2><button id="close">关闭</button></header><p><small>每次查询都保留语境。无需登录；同步由你选择。</small></p><input id="search" placeholder="搜索本地查询"><p id="status"></p><details id="settings"><summary>个人网站与同步（可选）</summary><p>在个人网站的「连接与设置」生成配置，再粘贴到这里。只接受你自己的站点配置。</p><textarea id="config" rows="3" placeholder="粘贴连接配置 JSON"></textarea><p><label><input id="models" type="checkbox" checked> 自动使用账号默认模型配置</label></p><p><label><input id="records-sync" type="checkbox"> 开启查询记录同步</label></p><p><label><input id="include" type="checkbox"> 同步已有查询记录（含旧生词本和缓存导入）</label></p><button id="connect">连接账号并应用设置</button><button id="sync">立即同步</button><button id="disable">断开连接</button><button id="website">打开回顾网站</button><p><small>开启记录同步才上传原句、解释和来源。账号默认 Key 会下载到本机私有存储；断开连接不删除本机配置。</small></p></details><div id="records"></div></section>`;
     const el=id=>shadow.getElementById(id);
     const render=()=>{const q=el('search').value.toLowerCase(),all=allQueryEvents(),list=all.filter(e=>(e.selected_text+' '+e.context+' '+e.explanation).toLowerCase().includes(q));
-      const config=getSyncConfig();el('status').textContent=`本地 ${all.length} 条 · ${config?.enabled?(config.error?'同步待重试：'+config.error:config.last_sync?'最近同步 '+new Date(config.last_sync).toLocaleString():'同步已开启'):'同步未开启'}`;
+      const config=getSyncConfig();const cloud=storeGet(CLOUD_MODEL_KEY,null);el('models').checked=config?.model_sync!==false;el('records-sync').checked=config?config.sync_records!==false:false;el('include').checked=!!config?.include_history;el('status').textContent=`本地 ${all.length} 条 · ${config?.enabled?(config.error?'同步待重试：'+config.error:config.last_sync?'最近同步 '+new Date(config.last_sync).toLocaleString():'同步已开启'):'未连接账号'}${config?.model_error?' · '+config.model_error:cloud?' · 账号模型：'+cloud.name:''}`;
       el('records').innerHTML=list.slice(0,80).map(e=>`<article><strong>${escapeHtml(e.selected_text)}</strong><p>${escapeHtml(e.context||'未取得完整原句')}</p><p>${escapeHtml(e.explanation||({failed:'本次查询失败',pending:'查询未完成'}[e.status]||'暂无解释'))}</p><small>${escapeHtml(new Date(e.occurred_at).toLocaleString())} · ${e.from_cache?'缓存回看':e.origin==='legacy'?'历史导入':e.status}</small></article>`).join('')+(list.length>80?'<p>仅展示最新 80 条；可搜索更早记录，全部记录仍保存在本机。</p>':'');};
     el('close').onclick=()=>host.remove();el('search').oninput=render;
     el('connect').onclick=async()=>{try{
       if(typeof GM_setValue!=='function'||typeof GM_listValues!=='function')throw new Error('请通过支持 GM 存储的油猴管理器安装后再开启同步');
-      const c=JSON.parse(el('config').value),u=new URL(c.endpoint);
+      const c=el('config').value.trim()?JSON.parse(el('config').value):getSyncConfig();if(!c)throw new Error('请粘贴网站生成的连接配置');const u=new URL(c.endpoint);
       if(u.protocol!=='https:'&&!['localhost','127.0.0.1'].includes(u.hostname))throw new Error('同步站点必须使用 HTTPS');
       if(!/^sb_[a-f0-9]{64}$/.test(c.token)||!c.account_id||!c.device_id)throw new Error('连接配置不完整');
-      const config={endpoint:u.origin,token:c.token,device_id:c.device_id,account_id:c.account_id,enabled:true,include_history:el('include').checked,since:new Date().toISOString()};
+      const config={endpoint:u.origin,token:c.token,device_id:c.device_id,account_id:c.account_id,enabled:true,include_history:el('include').checked,sync_records:el('records-sync').checked,model_sync:el('models').checked,since:(getSyncConfig()?.token===c.token&&getSyncConfig()?.sync_records!==false?getSyncConfig()?.since:null)||new Date().toISOString()};
       const {data}=await gmFetch(config.endpoint+'/sync/me',{headers:{Authorization:'Bearer '+config.token}});
       if(data.account_id!==config.account_id||data.device_id!==config.device_id)throw new Error('连接配置验证失败');
-      if(config.include_history)importLegacyQueries();GM_setValue(SYNC_KEY,config);el('config').value='';await syncQueryHistory();render();
+      if(config.sync_records&&config.include_history)importLegacyQueries();GM_setValue(SYNC_KEY,config);el('config').value='';await syncQueryHistory();render();
     }catch(e){el('status').textContent=e.message;}};
     el('sync').onclick=async()=>{try{await syncQueryHistory();render();}catch(e){render();}};
     el('disable').onclick=()=>{const c=getSyncConfig();if(c)GM_setValue(SYNC_KEY,{...c,enabled:false});render();};
@@ -1918,6 +1941,7 @@
 
     $('save').onclick = () => {
       const { base, key, model } = readForm();
+      const sync=getSyncConfig();if(sync&&typeof GM_setValue==='function'){GM_setValue(SYNC_KEY,{...sync,model_sync:false});GM_setValue(CLOUD_MODEL_KEY,null);}
       storeSet(LLM_BASE_URL_KEY, base || DEFAULT_LLM_BASE_URL);
       storeSet(LLM_API_KEY_KEY, key);
       storeSet(LLM_MODEL_KEY, model || DEFAULT_LLM_MODEL);
@@ -1933,6 +1957,7 @@
     };
 
     $('clearKey').onclick = () => {
+      const sync=getSyncConfig();if(sync&&typeof GM_setValue==='function'){GM_setValue(SYNC_KEY,{...sync,model_sync:false});GM_setValue(CLOUD_MODEL_KEY,null);}
       storeSet(LLM_API_KEY_KEY, '');
       updateFabState();
       keyInput.value = '';

@@ -35,6 +35,7 @@ object DeepSeekSettings {
 
     @Volatile
     private var prefsCache: SharedPreferences? = null
+    private var encryptedAvailable: Boolean = false
 
     private fun prefs(context: Context): SharedPreferences {
         prefsCache?.let { return it }
@@ -51,7 +52,7 @@ object DeepSeekSettings {
                     masterKey,
                     EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                     EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-                ).also { migrateLegacyIfNeeded(app, it) }
+                ).also { encryptedAvailable = true; migrateLegacyIfNeeded(app, it) }
             } catch (e: Exception) {
                 Log.w(TAG, "EncryptedSharedPreferences unavailable; using private prefs", e)
                 app.getSharedPreferences(PREFS_LEGACY, Context.MODE_PRIVATE)
@@ -95,11 +96,15 @@ object DeepSeekSettings {
         apiKey: String,
         baseUrl: String,
         model: String,
-        thinkingEnabled: Boolean
+        thinkingEnabled: Boolean,
+        fromAccount: Boolean = false
     ) {
         val base = baseUrl.trim().trimEnd('/').ifEmpty { DEFAULT_BASE }
         val mod = model.trim().ifEmpty { DEFAULT_MODEL }
-        prefs(context).edit()
+        val target = prefs(context)
+        check(!fromAccount || encryptedAvailable) { "安全存储不可用，未保存账号模型密钥" }
+        if (!fromAccount) runCatching { com.veightz.sensebook.sync.QuerySync.pauseModelSync(context) }
+        target.edit()
             .putString(KEY_API, apiKey.trim())
             .putString(KEY_BASE, base)
             .putString(KEY_MODEL, mod)

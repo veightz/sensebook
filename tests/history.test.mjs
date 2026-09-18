@@ -30,6 +30,11 @@ function harness() {
     setTimeout: () => 0,
     clearTimeout: () => {},
     selectionGen: 1,
+    LLM_API_KEY_KEY: "model-key",
+    LLM_BASE_URL_KEY: "model-base",
+    LLM_MODEL_KEY: "model-name",
+    LLM_THINKING_KEY: "model-thinking",
+    saveQueryCache: () => {},
     makeCacheKey: (w, s) => w + "::" + s,
   };
   vm.createContext(sandbox);
@@ -143,4 +148,45 @@ test("switching account does not upload another account’s local records", asyn
     };
   };
   await history.syncQueryHistory();
+});
+
+test("model-only connection configures device without uploading history; manual override survives", async () => {
+  const { history, storage, sandbox } = harness();
+  storage.set("sensebook_personal_sync", {
+    enabled: true,
+    endpoint: "https://site.example",
+    token: "private",
+    account_id: "owner",
+    device_id: "device",
+    sync_records: false,
+  });
+  history.recordCompletedQuery(
+    { word: "private" },
+    { translation: "private" },
+    "translate",
+  );
+  sandbox.gmFetch = async (url) => {
+    if (url.endsWith("/me"))
+      return { data: { account_id: "owner", device_id: "device" } };
+    assert.ok(url.endsWith("/model-config"));
+    return {
+      data: {
+        profile: {
+          id: "p",
+          name: "test",
+          updated_at: "v1",
+          api_key: "synthetic-key",
+          model: "test-model",
+          base_url: "https://api.example/v1",
+        },
+      },
+    };
+  };
+  await history.syncQueryHistory();
+  assert.equal(storage.get("model-key"), "synthetic-key");
+  assert.equal(storage.get("sensebook_personal_sync").model_error, "");
+  storage.get("sensebook_personal_sync").model_sync = false;
+  storage.set("model-key", "manual");
+  await history.syncQueryHistory();
+  assert.equal(storage.get("model-key"), "manual");
 });

@@ -4,7 +4,11 @@ import { readFileSync } from "node:fs";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import app from "../worker/index.js";
 let mf, DB, config, event;
-const env = () => ({ DB, DEV_AUTH: "true" });
+const env = () => ({
+  DB,
+  DEV_AUTH: "true",
+  MODEL_CONFIG_KEY: Buffer.alloc(32, 7).toString("base64"),
+});
 const req = async (
   path,
   {
@@ -38,14 +42,16 @@ before(async () => {
     }),
   );
   DB = await mf.getD1Database("DB");
-  const statements = readFileSync(
-    new URL("../migrations/0001_personal.sql", import.meta.url),
-    "utf8",
-  )
-    .split(";")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  await DB.batch(statements.map((s) => DB.prepare(s)));
+  for (const migration of ["0001_personal.sql", "0002_model_profiles.sql"]) {
+    const statements = readFileSync(
+      new URL("../migrations/" + migration, import.meta.url),
+      "utf8",
+    )
+      .split(";")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    await DB.batch(statements.map((s) => DB.prepare(s)));
+  }
 });
 after(async () => {
   await mf?.dispose();
@@ -218,4 +224,93 @@ test("deletion removes review text and tombstone prevents resurrection on retry"
 test("revoked device loses sync access", async () => {
   await req("/api/devices/" + config.device_id, { method: "DELETE" });
   assert.equal((await req("/sync/me", { token: config.token })).status, 401);
+});
+
+test("account model secrets stay encrypted; default delivery and revocation", async () => {
+  const fields = {
+    name: "测试模型",
+    base_url: "https://api.deepseek.com/v1",
+    model: "deepseek-chat",
+    api_key: "synthetic-account-key",
+  };
+  const created = await req("/api/model-profiles", {
+    method: "POST",
+    body: fields,
+  });
+  assert.equal(created.status, 200);
+  const id = created.body.id;
+  const listed = await req("/api/model-profiles");
+  assert.equal(listed.body.profiles[0].is_default, true);
+  assert.ok(!JSON.stringify(listed).includes(fields.api_key));
+  assert.ok(!JSON.stringify(listed).includes("ciphertext"));
+  const row = await DB.prepare("SELECT * FROM model_profiles WHERE id=?")
+    .bind(id)
+    .first();
+  assert.ok(!row.api_key_ciphertext.includes(fields.api_key));
+  const { openApiKey } = await import("../worker/model-profiles.js");
+  assert.equal(await openApiKey(env(), row), fields.api_key);
+  await assert.rejects(() =>
+    openApiKey(env(), { ...row, user_id: "other-owner" }),
+  );
+  assert.equal(
+    (
+      await req("/api/model-profiles/" + id, {
+        method: "PUT",
+        body: { ...fields, api_key: "", name: "改名" },
+      })
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await req("/api/model-profiles/" + id, {
+        method: "PUT",
+        body: { ...fields, api_key: "", base_url: "https://other.example/v1" },
+      })
+    ).status,
+    400,
+  );
+  const device = (
+    await req("/api/devices", { method: "POST", body: { name: "模型测试端" } })
+  ).body.config;
+  assert.equal((await req("/sync/model-config")).status, 401);
+  assert.equal(
+    (await req("/sync/model-config", { token: device.token })).body.profile
+      .api_key,
+    fields.api_key,
+  );
+  const second = await req("/api/model-profiles", {
+    method: "POST",
+    body: { ...fields, name: "第二模型", is_default: true },
+  });
+  assert.equal(
+    (await req("/api/model-profiles")).body.profiles.filter((p) => p.is_default)
+      .length,
+    1,
+  );
+  assert.equal(
+    (await req("/sync/model-config", { token: device.token })).body.profile.id,
+    second.body.id,
+  );
+  await req("/api/model-profiles/" + second.body.id, { method: "DELETE" });
+  assert.equal(
+    (await req("/sync/model-config", { token: device.token })).body.profile,
+    null,
+  );
+  await req("/api/devices/" + device.device_id, { method: "DELETE" });
+  assert.equal(
+    (await req("/sync/model-config", { token: device.token })).status,
+    401,
+  );
+});
+
+test("model encryption requires deployment secret and proxy rejects arbitrary hosts", async () => {
+  const { sealApiKey, reviewEndpoint } =
+    await import("../worker/model-profiles.js");
+  await assert.rejects(() => sealApiKey({}, "owner", "profile", "test"));
+  assert.throws(() => reviewEndpoint({}, "https://untrusted.example/v1"));
+  assert.equal(
+    reviewEndpoint({}, "https://api.openai.com/v1"),
+    "https://api.openai.com/v1/chat/completions",
+  );
 });

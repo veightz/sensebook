@@ -69,3 +69,7 @@
 | `sensebook_llm_base_url` | LLM Base URL（默认 `https://api.deepseek.com/v1`） |
 | `sensebook_llm_api_key` | LLM API Key（仅本机；AI 释义直连用） |
 | `sensebook_llm_model` | LLM 模型（默认 `deepseek-flash`） |
+
+## Cloudflare 账号模型配置
+
+`migrations/0002_model_profiles.sql` 增加 `model_profiles`：归属账号、名称、HTTPS Base URL、模型、thinking、唯一默认项、更新时间；Key 仅保存 AES-256-GCM 密文和末尾掩码。加密密钥在 Worker Secret，与 D1 分离。设备仅可读取所属账号默认配置。
