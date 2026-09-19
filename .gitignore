@@ -28,3 +28,8 @@ macos/.build/
 macos/.swiftpm/
 
 /node_modules
+
+# Cloudflare production identity and encryption backup
+wrangler.production.json
+.cloudflare/
+__pycache__/

@@ -1,9 +1,37 @@
 # Cloudflare 个人版部署与试用
 
 ## 当前状态（2026-09-19）
-代码在 `codex/personal-review-v1`，独立工作树 `/Users/veightz/Develops/sensebook-personal-review-v1`。
-本地 Workers + D1 已可运行，网页支持电脑与手机布局；Android debug APK 可构建。
-远程尚未部署：现场 Cloudflare 凭据可读取 Workers 子域，但 D1 返回鉴权错误，Access 应用接口返回未启用。尚缺允许登录的个人邮箱。
+部署工作树 `/Users/veightz/Develops/sensebook-cloudflare-v1`，分支 `codex/cloudflare-v1`，继承全部个人版与原生端变更，main 未合并。
+Wrangler 4.135.0、cloudflared 2026.9.1 已安装，Cloudflare 官方 cloudflare / wrangler / workers-best-practices / cloudflare-one 技能已安装到本机 Codex skills。
+远程尚未部署：重新验证 D1 401，Access 应用 403/not_enabled。登录邮箱需要用户明确指定，不从 Git 或 Cloudflare 账号邮箱推断。
+
+## 推荐部署入口
+
+在本工作树内执行 `npm ci` 即可恢复锁定的 CLI 依赖。Python 3 无额外依赖。
+
+```sh
+npm run cloud:doctor
+```
+
+当前凭据不足。请在 [Cloudflare API Tokens](https://dash.cloudflare.com/profile/api-tokens) 为目标账号准备包含 Workers Scripts Edit、D1 Edit、Workers 子域读取和 Access 应用/组织读取权限的 Token。Access 本身可在后台手动配置；如需由 API 配置则增加对应 Access 编辑权限。不要将 Token 发到聊天中，使用本机环境变量 `CLOUDFLARE_API_TOKEN` 与 `CLOUDFLARE_ACCOUNT_ID`。
+
+在 [Zero Trust 后台](https://one.dash.cloudflare.com/) 选择 Free、启用 Access 和 One-time PIN，创建 Self-hosted 应用，域名使用账号 Workers 子域下的 `sensebook-personal.<subdomain>.workers.dev/login`，仅允许你的个人邮箱。不要给整个站点加 Access，否则设备同步请求也会被拦截。
+
+随后在终端提供非密钥配置（示例值要替换）：
+
+```sh
+export OWNER_EMAIL='你的登录邮箱'
+export ACCESS_TEAM_DOMAIN='你的团队.cloudflareaccess.com'
+export ACCESS_AUD='Access 应用的 audience'
+npm run cloud:prepare
+npm run cloud:publish
+```
+
+`prepare` 检查 Access 应用与团队后，复用/创建 D1 并生成被 Git 忽略的 `wrangler.production.json`。`publish` 执行 migrations、发布 Worker，只在首次创建模型加密 Secret。既有 Secret 不覆盖，已有加密记录却缺少 Secret 时停止，避免数据无法解密。首次生成的密钥备份保存在 `.cloudflare/model-config-key`，权限 600，请安全备份。脚本不会上传本地预览数据库、设备 Token 或模型 Key。
+
+如果选择 Wrangler 浏览器登录，请注意已设置的 `CLOUDFLARE_API_TOKEN` 优先于 OAuth。可以用 `env -u CLOUDFLARE_API_TOKEN npx wrangler login` 发起登录；此后的手工 Wrangler 命令也要移除旧 Token。上面的 Python 自动化流程专用于显式 API Token；OAuth 模式使用下方手工步骤，不混用两套身份。
+
+生产发布成功后必须验证首页、`/health`、`/login` 和未登录 `/api/me`（应返回 401）。真实邮箱验证码由用户完成，不能用 DEV_AUTH 绕过。
 
 ## 本地试用
 
@@ -27,7 +55,7 @@ npm run dev:cloud
 3. 运行 `npx wrangler d1 migrations apply sensebook-personal --remote`。
 4. 在 Cloudflare Zero Trust 启用 Free 方案。配置 One-time PIN 身份提供方，创建 Self-hosted Access 应用，**仅保护最终站点域名的 `/login` 路径**（不要保护全部路径，否则脚本和 Android 的设备同步请求会被拦截）。Allow 策略只 Include 个人邮箱。会话时长建议 24 小时。
 5. 把 Access 团队域名（如 `my-team.cloudflareaccess.com`，不含 https）、应用 AUD、允许的邮箱填入 wrangler.jsonc 的 ACCESS_TEAM_DOMAIN / ACCESS_AUD / OWNER_EMAIL。
-6. 先通过 Cloudflare Secret 设置 `MODEL_CONFIG_KEY`（随机 32 字节的 Base64，勿使用本地开发密钥）：`openssl rand -base64 32 | npx wrangler secret put MODEL_CONFIG_KEY`。妥善备份此密钥；直接替换会导致已有配置无法解密，轮换需先完成数据重加密。再执行 `npm run deploy:cloud`，使用返回的 workers.dev 地址。若账号后台不支持为该免费地址配置 Access 路径，使用已有 Cloudflare 自定义域名；不要因此购买域名或升级付费方案。
+6. 先通过 Cloudflare Secret 设置 `MODEL_CONFIG_KEY`（随机 32 字节的 Base64，勿使用本地开发密钥）：`openssl rand -base64 32 | npx wrangler secret put MODEL_CONFIG_KEY`。妥善备份此密钥；直接替换会导致已有配置无法解密，轮换需先完成数据重加密。手工方案再执行 `npx wrangler deploy --config wrangler.jsonc`，使用返回的 workers.dev 地址。若账号后台不支持为该免费地址配置 Access 路径，使用已有 Cloudflare 自定义域名；不要因此购买域名或升级付费方案。
 7. 正式域名访问 `/login`，验证邮箱后跳回网站。`/api/me` 必须在未登录时返回 401；设备凭据只能访问 `/sync/*`。
 
 默认部署配置没有 DEV_AUTH，缺少 Access 配置时 API 返回 503，不会以开发身份开放数据。不要将 `.dev.vars` 内容复制为生产环境变量。

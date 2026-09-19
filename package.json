@@ -12,8 +12,12 @@
     "test:llm-parse": "node scripts/test-llm-parse.mjs",
     "dev:cloud": "wrangler dev --ip 127.0.0.1 --port 8788",
     "db:local": "wrangler d1 migrations apply sensebook-personal --local",
-    "deploy:cloud": "wrangler deploy",
-    "test:cloud": "node --test tests/*.test.mjs"
+    "deploy:cloud": "npm run cloud:publish",
+    "test:cloud": "node --test tests/*.test.mjs",
+    "cloud:doctor": "python3 scripts/cloudflare-deploy.py doctor",
+    "cloud:prepare": "python3 scripts/cloudflare-deploy.py prepare",
+    "cloud:publish": "python3 scripts/cloudflare-deploy.py publish",
+    "test:deploy": "python3 -m unittest discover -s tests -p test_cloudflare_deploy.py"
   },
   "engines": {
     "node": ">=22"
