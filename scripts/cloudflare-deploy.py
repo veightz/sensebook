@@ -103,6 +103,7 @@ def prepare(api):
     config['vars'] = values
     # 先确认 Access 已配置；缺少登录方案时不创建数据库，也不公开开发身份。
     subdomain = api.call('/workers/subdomain')['subdomain']
+    config['vars']['PASSKEY_ORIGIN'] = f'https://{config["name"]}.{subdomain}.workers.dev'
     expected = f'{config["name"]}.{subdomain}.workers.dev/login'
     apps = api.call('/access/apps')
     if not any(app.get('aud') == values['ACCESS_AUD'] and app.get('domain') == expected for app in apps):

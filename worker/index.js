@@ -1,3 +1,4 @@
+import { installPasskeys, sessionIdentity, createSession, endSession } from "./passkeys.js";
 import { Hono } from "hono";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { bodyLimit } from "hono/body-limit";
@@ -49,11 +50,15 @@ app.use("*", async (c, next) => {
 });
 app.get("/health", (c) => c.json({ ok: true, service: "Sensebook" }));
 
-// Access 只保护 /login：用已验证的 JWT 建立站内 HttpOnly 会话。
-// 所有业务 API 再次验证签名、issuer、audience、过期时间和个人邮箱，不能绕过源站鉴权。
-async function websiteIdentity(c) {
+// Access 只保护 /login；邮箱认证与 Passkey 统一使用可撤销的本站会话。
+// 兼容旧 JWT 会话时仍校验签名、issuer、audience、有效期和个人邮箱。
+async function websiteIdentity(c, accessOnly = false) {
   if (c.env.DEV_AUTH === "true" && loopback(c.req.url))
-    return { id: "local-owner", email: "local@localhost" };
+    return { id: "local-owner", email: "local@localhost", authAt: Math.floor(Date.now() / 1000) };
+  if (!accessOnly) {
+    const session = await sessionIdentity(c);
+    if (session) return session;
+  }
   const team = c.env.ACCESS_TEAM_DOMAIN;
   if (
     !/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(team || "") ||
@@ -67,7 +72,7 @@ async function websiteIdentity(c) {
     .find((x) => x.startsWith("sensebook_session="));
   const token =
     c.req.header("Cf-Access-Jwt-Assertion") ||
-    cookie?.slice("sensebook_session=".length);
+    (!accessOnly && cookie?.slice("sensebook_session=".length));
   if (!token) throw bad("请先登录", 401);
   const issuer = `https://${team}`;
   if (!keysets.has(issuer))
@@ -96,17 +101,15 @@ async function websiteIdentity(c) {
     email: payload.email,
     token,
     expires: payload.exp,
+    authAt: payload.iat,
   };
 }
 app.get("/login", async (c) => {
-  const user = await websiteIdentity(c);
-  if (user.token)
-    c.header(
-      "Set-Cookie",
-      `sensebook_session=${user.token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.max(0, user.expires - Math.floor(Date.now() / 1000))}`,
-    );
+  const user = await websiteIdentity(c, true);
+  await createSession(c, user);
   return c.redirect("/");
 });
+installPasskeys(app, websiteIdentity);
 app.use("/api/*", async (c, next) => {
   // Cookie 鉴权的写操作只接受本站 Origin，防止跨站提交。
   if (
@@ -129,10 +132,12 @@ app.get("/api/me", (c) =>
     local: c.env.DEV_AUTH === "true" && loopback(c.req.url),
   }),
 );
-app.post("/api/logout", (c) => {
+app.post("/api/logout", async (c) => {
+  await endSession(c);
   c.header(
     "Set-Cookie",
     "sensebook_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
+    { append: true },
   );
   return c.json({ ok: true });
 });

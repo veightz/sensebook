@@ -42,7 +42,7 @@ before(async () => {
     }),
   );
   DB = await mf.getD1Database("DB");
-  for (const migration of ["0001_personal.sql", "0002_model_profiles.sql"]) {
+  for (const migration of ["0001_personal.sql", "0002_model_profiles.sql", "0003_passkeys.sql"]) {
     const statements = readFileSync(
       new URL("../migrations/" + migration, import.meta.url),
       "utf8",

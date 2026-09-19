@@ -104,3 +104,12 @@ npx wrangler deploy --dry-run
 ```
 
 云端测试使用真实本地 D1 binding，模型请求用测试响应替代；不会消耗模型额度。真实邮箱登录、真实模型生成与 Android 真机跨端同步需部署配置后验收。
+
+## Passkey 试用
+
+- `PASSKEY_ORIGIN` 必须是固定 HTTPS 源（无末尾斜杠），当前使用站点的 workers.dev 域名；不要根据请求 Host 动态放宽。
+- 应用迁移 `0003_passkeys.sql` 后再发布 Worker。Passkey 验证使用 `@simplewebauthn/server`，浏览器发行包在 `web/vendor/`（保留 MIT 许可，与锁文件中的 browser 版本一致）。
+- 首次：邮箱登录 → 账号设置 → 添加 Passkey；以后使用首页 Passkey 按钮。注册和撤销要求五分钟内认证，支持多个凭据。新会话保存在 D1，Cookie 仅包含随机令牌，D1 只保存令牌散列；退出立即撤销会话。
+- `/api/auth/login/*` 为公开认证端点，仍严格校验 Origin、RP、用户验证、签名、限流及五分钟一次性挑战。凭据管理必须经过账号鉴权；设备 token 不能管理 Passkey。
+- 换域名需重新注册；先保留邮箱恢复。原生端第一版仍通过网站连接设备，没有直接集成平台 Passkey API。
+- 回滚代码前不要删新表；部署前应备份 D1。真实指纹/面容、跨设备密码管理器体验须由用户在设备上验收，测试中的软件凭据仅存在测试数据库。

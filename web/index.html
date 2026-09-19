@@ -10,6 +10,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='12' fill='%232b5948'/%3E%3Ctext x='11' y='29' fill='white' font-size='28' font-family='Georgia'%3Es%3C/text%3E%3C/svg%3E"
     />
     <link rel="stylesheet" href="/app.css" />
+    <script src="/vendor/simplewebauthn-browser.js"></script>
     <script type="module" src="/app.js"></script>
   </head>
   <body>
@@ -46,7 +47,8 @@
           <p>
             在电脑和手机上查询，在这里重新理解。<br />登录后查看已同步的记录；翻译工具始终可以独立使用。
           </p>
-          <a class="primary button" href="/login"
+          <button id="passkey-login" class="primary" type="button">使用 Passkey 登录</button>
+          <a class="quiet button" href="/login"
             >邮箱验证码登录 <span>↗</span></a
           >
           <p class="small">个人版 · 仅允许站点所有者登录</p>
@@ -243,6 +245,17 @@
                 <button class="quiet" id="refresh-devices">刷新</button>
               </div>
               <div id="devices"></div>
+            </section>
+            <section class="setting-card devices-card">
+              <h2>Passkey · 快捷登录</h2>
+              <p class="meta">首次用邮箱登录后添加，下次通过指纹、面容或设备解锁登录。可以为不同设备添加多个 Passkey。</p>
+              <label>名称 <input id="passkey-name" maxlength="80" placeholder="例如：MacBook / 手机" /></label>
+              <button id="passkey-add" class="primary" type="button">添加 Passkey</button>
+              <button id="passkey-reauth" class="quiet" type="button">用 Passkey 重新验证</button>
+              <a class="quiet button" href="/login">邮箱验证 / 恢复登录</a>
+              <p class="meta">管理凭据需在登录后五分钟内完成。Passkey 与当前网站域名绑定，换域名后可能需要重新添加。</p>
+              <details><summary>邮箱恢复后仍提示重新验证？</summary><p class="meta">先<a href="/cdn-cgi/access/logout" target="_blank" rel="noopener">退出邮箱验证会话</a>，再回到本站点击邮箱登录。这也会退出同一 Cloudflare Access 团队的其他应用验证会话。</p></details>
+              <div id="passkeys"></div>
             </section>
             <button id="logout" class="quiet">退出网站登录</button>
           </section>

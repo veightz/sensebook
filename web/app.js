@@ -1,3 +1,4 @@
+const { startRegistration, startAuthentication } = window.SimpleWebAuthnBrowser;
 const $ = (id) => document.getElementById(id);
 const state = {
   events: [],
@@ -75,7 +76,7 @@ function tab(name) {
     .querySelectorAll("[data-tab]")
     .forEach((e) => e.classList.toggle("active", e.dataset.tab === name));
   if (name === "review") loadReview().catch((e) => notice(e.message, true));
-  if (name === "settings") loadDevices().catch((e) => notice(e.message, true));
+  if (name === "settings") Promise.all([loadDevices(), loadPasskeys()]).catch((e) => notice(e.message, true));
 }
 document
   .querySelectorAll("[data-tab]")
@@ -449,6 +450,45 @@ $("profiles").onclick = run(async (e) => {
     await loadProfiles();
     notice("账号配置已删除。");
   }
+});
+
+async function loadPasskeys() {
+  const data = await api('/auth/passkeys');
+  $('passkeys').innerHTML = data.passkeys.map(p => `<div class="profile-row"><div><strong>${esc(p.name)}</strong><p class="meta">添加于 ${esc(fmt(p.created_at * 1000))}${p.last_used_at ? ' · 最近使用 ' + esc(fmt(p.last_used_at * 1000)) : ''}</p></div><button class="quiet danger" data-remove-passkey="${esc(p.id)}">撤销</button></div>`).join('') || '<p class="meta">尚未添加 Passkey。请先完成邮箱登录。</p>';
+}
+function passkeyAction(button, action) {
+  return run(async () => {
+    button.disabled = true;
+    try {
+      if (!window.PublicKeyCredential || !window.isSecureContext) throw new Error('请在支持 Passkey 的系统浏览器中打开 HTTPS 网站。');
+      await action();
+    } catch (e) {
+      if (e.name === 'NotAllowedError') throw new Error('验证已取消或超时，可以重试或使用邮箱验证码。');
+      throw e;
+    } finally { button.disabled = false; }
+  });
+}
+async function passkeyLogin() {
+  const optionsJSON = await api('/auth/login/options', { method: 'POST' });
+  const response = await startAuthentication({ optionsJSON });
+  await api('/auth/login/verify', { method: 'POST', body: response });
+  location.reload();
+}
+$('passkey-login').onclick = passkeyAction($('passkey-login'), passkeyLogin);
+$('passkey-reauth').onclick = passkeyAction($('passkey-reauth'), passkeyLogin);
+$('passkey-add').onclick = passkeyAction($('passkey-add'), async () => {
+  const optionsJSON = await api('/auth/passkeys/options', { method: 'POST' });
+  const response = await startRegistration({ optionsJSON });
+  await api('/auth/passkeys/verify', { method: 'POST', body: { response, name: $('passkey-name').value.trim() || '我的 Passkey' } });
+  await loadPasskeys();
+  notice('Passkey 已添加。下次可直接使用指纹、面容或设备解锁登录。');
+});
+$('passkeys').onclick = run(async e => {
+  const button = e.target.closest('[data-remove-passkey]');
+  if (!button || !confirm('撤销此 Passkey？由它建立的网站会话也会退出，邮箱登录仍可用于恢复。')) return;
+  await api('/auth/passkeys/' + encodeURIComponent(button.dataset.removePasskey), { method: 'DELETE' });
+  await loadPasskeys();
+  notice('Passkey 已撤销。');
 });
 
 try {
