@@ -9,3 +9,5 @@
 2026-09-19 现场：Wrangler 4.135.0、cloudflared 2026.9.1 可运行。当前 API Token 可读 Workers 子域；D1 401/code 10000；Access apps 403/not_enabled，组织接口 403。不能用本地开发身份绕过。部署工具不足与账号授权不足明确区分。
 
 新增工具：cloud:doctor 只读诊断；cloud:prepare 验证必要身份配置并准备 D1/生产配置；cloud:publish 应用 migrations、发布、只在首次设置模型密钥（禁止覆盖已有密钥）。生产配置和密钥备份均忽略，不入 Git。暂不自动接受套餐条款或开通付费服务。
+
+后续进展：用户完成 OAuth 登录。已创建专用 sensebook-personal D1、应用两份迁移、发布 Worker 与静态资源、设置首次生产模型加密 Secret。公网站点 https://sensebook-personal.veightz3161.workers.dev 浏览器可见，登录提示尚未配置。Access 仍未启用且 OWNER_EMAIL 未提供，未开放个人数据。脚本新增显式 OAuth 模式，不输出/另存 OAuth token。

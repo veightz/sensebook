@@ -23,8 +23,19 @@ class API:
     def __init__(self):
         self.account = os.environ.get('CLOUDFLARE_ACCOUNT_ID', '')
         self.token = os.environ.get('CLOUDFLARE_API_TOKEN', '')
+        if os.environ.get('SENSEBOOK_CLOUDFLARE_AUTH') == 'oauth' or not self.token:
+            env = dict(os.environ)
+            env.pop('CLOUDFLARE_API_TOKEN', None)
+            cli = ROOT / 'node_modules/wrangler/bin/wrangler.js'
+            result = subprocess.run(['node', str(cli), 'auth', 'token', '--json'], cwd=ROOT, env=env, text=True, capture_output=True)
+            if result.returncode:
+                raise DeployError('OAuth 未就绪，请先执行 env -u CLOUDFLARE_API_TOKEN npx wrangler login --use-keyring。')
+            try:
+                self.token = json.loads(result.stdout)['token']
+            except (ValueError, KeyError):
+                raise DeployError('无法读取 Wrangler OAuth 授权；未输出凭据。') from None
         if not re.fullmatch(r'[a-f0-9]{32}', self.account) or not self.token:
-            raise DeployError('请在本机设置 CLOUDFLARE_ACCOUNT_ID 和 CLOUDFLARE_API_TOKEN，不要发到聊天或提交到 Git。')
+            raise DeployError('请设置目标 CLOUDFLARE_ACCOUNT_ID，并提供 API Token 或完成 Wrangler OAuth 登录。')
 
     def call(self, path, method='GET', body=None, missing_ok=False):
         req = urllib.request.Request(
@@ -117,6 +128,8 @@ def wrangler(*args, secret=None):
     if not cli.exists():
         raise DeployError('请先运行 npm ci 安装项目锁定的 Wrangler。')
     env = dict(os.environ, WRANGLER_SEND_METRICS='false', CI='true')
+    if os.environ.get('SENSEBOOK_CLOUDFLARE_AUTH') == 'oauth':
+        env.pop('CLOUDFLARE_API_TOKEN', None)
     command = ['node', str(cli), *args, '--config', str(CONFIG)]
     if secret is not None:
         # Secret 只经 stdin 发送；不进入命令参数，也不把 CLI 输出带入日志。

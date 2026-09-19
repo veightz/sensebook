@@ -3,7 +3,7 @@
 ## 当前状态（2026-09-19）
 部署工作树 `/Users/veightz/Develops/sensebook-cloudflare-v1`，分支 `codex/cloudflare-v1`，继承全部个人版与原生端变更，main 未合并。
 Wrangler 4.135.0、cloudflared 2026.9.1 已安装，Cloudflare 官方 cloudflare / wrangler / workers-best-practices / cloudflare-one 技能已安装到本机 Codex skills。
-远程尚未部署：重新验证 D1 401，Access 应用 403/not_enabled。登录邮箱需要用户明确指定，不从 Git 或 Cloudflare 账号邮箱推断。
+网站已发布到 https://sensebook-personal.veightz3161.workers.dev ，浏览器已确认登录页可见。用户完成 OAuth 授权后，D1 已创建，0001/0002 远端迁移通过，MODEL_CONFIG_KEY 已作为生产 Secret 设置；Access 应用仍返回 403/not_enabled，所以个人数据接口保持关闭。登录邮箱需要用户明确指定，不从 Git 或 Cloudflare 账号邮箱推断。
 
 ## 推荐部署入口
 
@@ -29,7 +29,7 @@ npm run cloud:publish
 
 `prepare` 检查 Access 应用与团队后，复用/创建 D1 并生成被 Git 忽略的 `wrangler.production.json`。`publish` 执行 migrations、发布 Worker，只在首次创建模型加密 Secret。既有 Secret 不覆盖，已有加密记录却缺少 Secret 时停止，避免数据无法解密。首次生成的密钥备份保存在 `.cloudflare/model-config-key`，权限 600，请安全备份。脚本不会上传本地预览数据库、设备 Token 或模型 Key。
 
-如果选择 Wrangler 浏览器登录，请注意已设置的 `CLOUDFLARE_API_TOKEN` 优先于 OAuth。可以用 `env -u CLOUDFLARE_API_TOKEN npx wrangler login` 发起登录；此后的手工 Wrangler 命令也要移除旧 Token。上面的 Python 自动化流程专用于显式 API Token；OAuth 模式使用下方手工步骤，不混用两套身份。
+如果选择 Wrangler 浏览器登录，请注意已设置的 `CLOUDFLARE_API_TOKEN` 优先于 OAuth。可以用 `env -u CLOUDFLARE_API_TOKEN npx wrangler login` 发起登录；此后的手工 Wrangler 命令也要移除旧 Token。Python 自动化也支持 OAuth：先 `export SENSEBOOK_CLOUDFLARE_AUTH=oauth`，脚本会通过 Wrangler 在内存中取得授权，并为后续 CLI 去掉旧 Token。不会打印或另存 OAuth 凭据；Access 管理权限仍需单独确认。
 
 生产发布成功后必须验证首页、`/health`、`/login` 和未登录 `/api/me`（应返回 401）。真实邮箱验证码由用户完成，不能用 DEV_AUTH 绕过。
 

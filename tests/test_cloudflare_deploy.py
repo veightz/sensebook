@@ -35,6 +35,15 @@ class DeploymentTests(unittest.TestCase):
         path = Path(folder)/'wrangler.production.json'
         path.write_text(json.dumps(config))
         return path
+    def test_oauth_ignores_old_api_token(self):
+        import subprocess
+        env = {'CLOUDFLARE_ACCOUNT_ID':'a'*32,'CLOUDFLARE_API_TOKEN':'old-test-token','SENSEBOOK_CLOUDFLARE_AUTH':'oauth'}
+        response = subprocess.CompletedProcess([],0,stdout=json.dumps({'type':'oauth','token':'synthetic-oauth'}))
+        with patch.dict('os.environ',env,clear=True), patch.object(deploy.subprocess,'run',return_value=response) as run:
+            api = deploy.API()
+            self.assertEqual(api.token,'synthetic-oauth')
+            self.assertNotIn('CLOUDFLARE_API_TOKEN',run.call_args.kwargs['env'])
+
     def test_existing_secret_not_replaced(self):
         with tempfile.TemporaryDirectory() as folder:
             config = self.fixture(folder)
