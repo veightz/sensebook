@@ -18,3 +18,9 @@ android/**/build/
 android/*.iml
 *.apk
 *.aab
+
+# macOS / Xcode
+macos/build/
+macos/DerivedData/
+macos/**/xcuserdata/
+*.xcuserstate

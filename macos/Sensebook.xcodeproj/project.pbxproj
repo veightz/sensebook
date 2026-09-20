@@ -1,0 +1,375 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		628ED72FE91742FCBE3E4AB5 /* SensebookApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A670299750244815A556EAC9 /* SensebookApp.swift */; };
+		956CDEA003214E69A39CFEA2 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20B118E2281F49C495DA623E /* AppDelegate.swift */; };
+		12239A0776904EA093660320 /* SelectionReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6ED56844D6C0486B9319066B /* SelectionReader.swift */; };
+		B2CC856676034DC69ECAEB3F /* HotKeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F26B47F3CE424EAFBE8B6F15 /* HotKeyManager.swift */; };
+		ACB87482009648F18660A155 /* LocalDict.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC258F0E444C437388580C23 /* LocalDict.swift */; };
+		9EFC20EB54A74CF39156BF45 /* DeepSeekClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EE43C6DDC82440D954C18D5 /* DeepSeekClient.swift */; };
+		219391F9FFB74B489E7A58BC /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0781EFEC957C4129BB1FCD6E /* KeychainStore.swift */; };
+		D566CA5F042A4B7182CEB71E /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7DB8609136F4E789F03DF5B /* AppSettings.swift */; };
+		EF178FE203B34ABEA42B8B95 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5606AC2158A740F8A530F154 /* SettingsView.swift */; };
+		449C445072514DB4B3823DE9 /* PopupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D91651B3FAA4552A2BF0A13 /* PopupView.swift */; };
+		23FC62A4CC6A47EAA23969A8 /* PopupWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4927BD644B3642BEAB53D60F /* PopupWindowController.swift */; };
+		1C2D6688CDFC429299E6F263 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F4D02D9C36C84D4D8EDC3BDB /* Assets.xcassets */; };
+		88F45325993243F9B17887D7 /* en-zh-common.json in Resources */ = {isa = PBXBuildFile; fileRef = ED79E6B33E0E40E8BD140EAF /* en-zh-common.json */; };
+		ADF32B2259CA416C8D4DAE4C /* SOURCE.md in Resources */ = {isa = PBXBuildFile; fileRef = D11F44531ED547A8A61A84F5 /* SOURCE.md */; };
+		AA415798DE04409C9D3E5CB2 /* Carbon.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 25452E41E70B414FB10E77AC /* Carbon.framework */; };
+		B4F0B51218214D8E9D831059 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5046F7ECDC214C6E83415F10 /* AppKit.framework */; };
+		08D4EC9BF3C64FE7AC88E6CB /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0A4A036648824D90AE0847C0 /* Security.framework */; };
+		938473943EFD426998014124 /* ApplicationServices.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DA3E4BFDFCF149E3888009D0 /* ApplicationServices.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		15C8C498F3AD4CD7AE18A7B5 /* Sensebook.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Sensebook.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A670299750244815A556EAC9 /* SensebookApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensebookApp.swift; sourceTree = "<group>"; };
+		20B118E2281F49C495DA623E /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		6ED56844D6C0486B9319066B /* SelectionReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionReader.swift; sourceTree = "<group>"; };
+		F26B47F3CE424EAFBE8B6F15 /* HotKeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotKeyManager.swift; sourceTree = "<group>"; };
+		AC258F0E444C437388580C23 /* LocalDict.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalDict.swift; sourceTree = "<group>"; };
+		4EE43C6DDC82440D954C18D5 /* DeepSeekClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepSeekClient.swift; sourceTree = "<group>"; };
+		0781EFEC957C4129BB1FCD6E /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		B7DB8609136F4E789F03DF5B /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
+		5606AC2158A740F8A530F154 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		4D91651B3FAA4552A2BF0A13 /* PopupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PopupView.swift; sourceTree = "<group>"; };
+		4927BD644B3642BEAB53D60F /* PopupWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PopupWindowController.swift; sourceTree = "<group>"; };
+		F4D02D9C36C84D4D8EDC3BDB /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		141201C81A2B4FD3A5BD6EE3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		E0877CE3040040C78FADB335 /* Sensebook.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Sensebook.entitlements; sourceTree = "<group>"; };
+		ED79E6B33E0E40E8BD140EAF /* en-zh-common.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "en-zh-common.json"; sourceTree = "<group>"; };
+		D11F44531ED547A8A61A84F5 /* SOURCE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = SOURCE.md; sourceTree = "<group>"; };
+		25452E41E70B414FB10E77AC /* Carbon.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Carbon.framework; path = System/Library/Frameworks/Carbon.framework; sourceTree = SDKROOT; };
+		5046F7ECDC214C6E83415F10 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };
+		0A4A036648824D90AE0847C0 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		DA3E4BFDFCF149E3888009D0 /* ApplicationServices.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ApplicationServices.framework; path = System/Library/Frameworks/ApplicationServices.framework; sourceTree = SDKROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		E06C08CAD74F421E9C8E31C4 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B4F0B51218214D8E9D831059 /* AppKit.framework in Frameworks */,
+				938473943EFD426998014124 /* ApplicationServices.framework in Frameworks */,
+				AA415798DE04409C9D3E5CB2 /* Carbon.framework in Frameworks */,
+				08D4EC9BF3C64FE7AC88E6CB /* Security.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		B414CBD1BB0C470BA46E8266 = {
+			isa = PBXGroup;
+			children = (
+				726FC33F2BD1471DB54568E5 /* Sensebook */,
+				D75A144BB605456C9AAE7629 /* Frameworks */,
+				CEF9C4EBDE0B4AB7A29491DD /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		CEF9C4EBDE0B4AB7A29491DD /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				15C8C498F3AD4CD7AE18A7B5 /* Sensebook.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		D75A144BB605456C9AAE7629 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				5046F7ECDC214C6E83415F10 /* AppKit.framework */,
+				DA3E4BFDFCF149E3888009D0 /* ApplicationServices.framework */,
+				25452E41E70B414FB10E77AC /* Carbon.framework */,
+				0A4A036648824D90AE0847C0 /* Security.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		726FC33F2BD1471DB54568E5 /* Sensebook */ = {
+			isa = PBXGroup;
+			children = (
+				A670299750244815A556EAC9 /* SensebookApp.swift */,
+				20B118E2281F49C495DA623E /* AppDelegate.swift */,
+				F8ACD2B7DCFB40469719E212 /* Selection */,
+				AA363D9041634A669656DB58 /* Dict */,
+				BD3DF22837A641BDA9138722 /* LLM */,
+				B12A062323254B90A8DD2E8F /* Settings */,
+				6296DEE4BFB44DFF808E724E /* UI */,
+				E1EE636ABF6647B5A1D3B906 /* Resources */,
+				F4D02D9C36C84D4D8EDC3BDB /* Assets.xcassets */,
+				141201C81A2B4FD3A5BD6EE3 /* Info.plist */,
+				E0877CE3040040C78FADB335 /* Sensebook.entitlements */,
+			);
+			path = Sensebook;
+			sourceTree = "<group>";
+		};
+		F8ACD2B7DCFB40469719E212 /* Selection */ = {
+			isa = PBXGroup;
+			children = (
+				6ED56844D6C0486B9319066B /* SelectionReader.swift */,
+				F26B47F3CE424EAFBE8B6F15 /* HotKeyManager.swift */,
+			);
+			path = Selection;
+			sourceTree = "<group>";
+		};
+		AA363D9041634A669656DB58 /* Dict */ = {
+			isa = PBXGroup;
+			children = (
+				AC258F0E444C437388580C23 /* LocalDict.swift */,
+			);
+			path = Dict;
+			sourceTree = "<group>";
+		};
+		BD3DF22837A641BDA9138722 /* LLM */ = {
+			isa = PBXGroup;
+			children = (
+				4EE43C6DDC82440D954C18D5 /* DeepSeekClient.swift */,
+			);
+			path = LLM;
+			sourceTree = "<group>";
+		};
+		B12A062323254B90A8DD2E8F /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				0781EFEC957C4129BB1FCD6E /* KeychainStore.swift */,
+				B7DB8609136F4E789F03DF5B /* AppSettings.swift */,
+				5606AC2158A740F8A530F154 /* SettingsView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		6296DEE4BFB44DFF808E724E /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				4D91651B3FAA4552A2BF0A13 /* PopupView.swift */,
+				4927BD644B3642BEAB53D60F /* PopupWindowController.swift */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
+		E1EE636ABF6647B5A1D3B906 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				24793F2855864D9592E51595 /* dict */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		24793F2855864D9592E51595 /* dict */ = {
+			isa = PBXGroup;
+			children = (
+				ED79E6B33E0E40E8BD140EAF /* en-zh-common.json */,
+				D11F44531ED547A8A61A84F5 /* SOURCE.md */,
+			);
+			path = dict;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		BB0595F6ACE346878B053B2B /* Sensebook */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 98E572659B6E4645B36EFD43 /* Build configuration list for PBXNativeTarget "Sensebook" */;
+			buildPhases = (
+				909E62ED79624B20B6BF13F0 /* Sources */,
+				E06C08CAD74F421E9C8E31C4 /* Frameworks */,
+				DDC8402983BB4057A2D2372B /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Sensebook;
+			productName = Sensebook;
+			productReference = 15C8C498F3AD4CD7AE18A7B5 /* Sensebook.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		59486E0AACAE479289F59477 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+			};
+			buildConfigurationList = C5E2957EEB0B425D95788A30 /* Build configuration list for PBXProject "Sensebook" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = "zh-Hans";
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+				"zh-Hans",
+			);
+			mainGroup = B414CBD1BB0C470BA46E8266;
+			productRefGroup = CEF9C4EBDE0B4AB7A29491DD /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				BB0595F6ACE346878B053B2B /* Sensebook */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		DDC8402983BB4057A2D2372B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1C2D6688CDFC429299E6F263 /* Assets.xcassets in Resources */,
+				88F45325993243F9B17887D7 /* en-zh-common.json in Resources */,
+				ADF32B2259CA416C8D4DAE4C /* SOURCE.md in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		909E62ED79624B20B6BF13F0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				628ED72FE91742FCBE3E4AB5 /* SensebookApp.swift in Sources */,
+				956CDEA003214E69A39CFEA2 /* AppDelegate.swift in Sources */,
+				12239A0776904EA093660320 /* SelectionReader.swift in Sources */,
+				B2CC856676034DC69ECAEB3F /* HotKeyManager.swift in Sources */,
+				ACB87482009648F18660A155 /* LocalDict.swift in Sources */,
+				9EFC20EB54A74CF39156BF45 /* DeepSeekClient.swift in Sources */,
+				219391F9FFB74B489E7A58BC /* KeychainStore.swift in Sources */,
+				D566CA5F042A4B7182CEB71E /* AppSettings.swift in Sources */,
+				EF178FE203B34ABEA42B8B95 /* SettingsView.swift in Sources */,
+				449C445072514DB4B3823DE9 /* PopupView.swift in Sources */,
+				23FC62A4CC6A47EAA23969A8 /* PopupWindowController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		0FD83B7C185A462D9DE89D93 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		CDB6E9B8C9814160ACBB9D6B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		2A0775A30EDF46D7A8F53A79 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Sensebook/Sensebook.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Sensebook/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.veightz.sensebook;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		AE855FF003EB4D6DA5415DFA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Sensebook/Sensebook.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Sensebook/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.veightz.sensebook;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		C5E2957EEB0B425D95788A30 /* Build configuration list for PBXProject "Sensebook" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0FD83B7C185A462D9DE89D93 /* Debug */,
+				CDB6E9B8C9814160ACBB9D6B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		98E572659B6E4645B36EFD43 /* Build configuration list for PBXNativeTarget "Sensebook" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2A0775A30EDF46D7A8F53A79 /* Debug */,
+				AE855FF003EB4D6DA5415DFA /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 59486E0AACAE479289F59477 /* Project object */;
+}

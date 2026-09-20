@@ -4,7 +4,7 @@
 
 > **默认可不登录**：油猴脚本将词条保存在浏览器本地存储（`GM_setValue` / `localStorage`）。服务器与账号仅用于**可选**同步，不是 MVP 必需。
 
-本仓库为本地 MVP 脚手架：Tampermonkey 用户脚本（主路径）+ 可选 Node/Hono/SQLite 后端 + [`android/`](android/) PROCESS_TEXT 划词 MVP（Kotlin）。
+本仓库为本地 MVP 脚手架：Tampermonkey 用户脚本（主路径）+ 可选 Node/Hono/SQLite 后端 + [`android/`](android/) PROCESS_TEXT 划词 MVP（Kotlin）+ [`macos/`](macos/) 菜单栏划词 MVP（Swift / SwiftUI）。
 
 
 
@@ -105,6 +105,19 @@ Chrome 138+ 需要单独打开油猴的用户脚本权限，否则脚本显示�
 
 详情、里程碑与排障见 [`android/README.md`](android/README.md)。
 
+## macOS（菜单栏 · M1）
+
+菜单栏划词（`LSUIElement` / 无 Dock）。包名 `com.veightz.sensebook` · version **0.1.0**。默认快捷键 **⌥D**。短词：本地词库 + DeepSeek 词义/搭配效果；整句：仅模型。API Key 存 **钥匙串**。
+
+| | |
+|--|--|
+| 工程路径 | [`macos/`](macos/)（打开 `Sensebook.xcodeproj`） |
+| 系统 | macOS 13+ · 需在 **Mac + Xcode** 上编译（Linux 盒子无法出 macOS 二进制） |
+| 权限 | 系统设置 → 隐私与安全性 → **辅助功能** 启用 Sensebook |
+
+详见 [`macos/README.md`](macos/README.md)。
+
+
 ## 可选：启动本地服务器（同步 / 词库页）
 
 若需要账号同步或 Web 词库页：
@@ -198,6 +211,8 @@ web/index.html                    # 词库页（可选；支持未登录时浏�
 userscript/sensebook.user.js      # 主路径：本地优先划词 + 本地词库/模型双出
 userscript/dict/en-zh-common.json # 半量 EN→ZH 本地词库（dict version ≠ @version）
 userscript/dict/SOURCE.md         # 词库来源与许可（ECDICT MIT）
+android/                          # PROCESS_TEXT 划词 MVP（Kotlin）
+macos/                            # 菜单栏划词 MVP（Swift / SwiftUI，需 Mac+Xcode）
 scripts/build-en-zh-dict.py       # 从 ECDICT 构建词库子集
 scripts/test-llm-parse.mjs        # prompt / JSON 解析烟测
 .env.example
