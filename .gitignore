@@ -24,3 +24,9 @@ macos/build/
 macos/DerivedData/
 macos/**/xcuserdata/
 *.xcuserstate
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*

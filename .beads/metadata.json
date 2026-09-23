@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "sensebook",
+  "project_id": "69b9917b-0fcf-482f-972e-4061b745a01e"
+}
