@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609231400
+// @version      0.1.202609231430
 // @description  划词自动查询 / 翻译 / 加入生词本 / 存本并释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -3558,6 +3558,18 @@
     };
   }
 
+  function clampFabEdges(right, bottom) {
+    const margin = 8;
+    const { w, h } = getFabSize();
+    const maxR = Math.max(margin, window.innerWidth - w - margin);
+    const maxB = Math.max(margin, window.innerHeight - h - margin);
+    return {
+      right: Math.min(Math.max(margin, right), maxR),
+      bottom: Math.min(Math.max(margin, bottom), maxB),
+    };
+  }
+
+  /** Drag uses left/top so the finger tracks 1:1. */
   function applyFabPosition(left, top) {
     if (!fabRoot) return;
     const pos = clampFabPosition(left, top);
@@ -3571,44 +3583,60 @@
     return pos;
   }
 
-  function defaultFabPosition() {
-    const { w, h } = getFabSize();
-    return {
-      left: Math.max(8, window.innerWidth - w - 16),
-      top: Math.max(8, window.innerHeight - h - 16),
-    };
+  /** Resting position is edge-anchored so resize / new viewports stay in the corner. */
+  function applyFabEdges(right, bottom) {
+    if (!fabRoot) return;
+    const pos = clampFabEdges(right, bottom);
+    applyStyles(fabRoot, {
+      left: 'auto',
+      top: 'auto',
+      right: pos.right + 'px',
+      bottom: pos.bottom + 'px',
+    });
+    if (isFabSheetOpen()) positionFabSheet();
+    return pos;
   }
 
-  function normalizeFabPos(raw) {
+  function defaultFabEdges() {
+    return { right: 16, bottom: 16 };
+  }
+
+  function normalizeFabEdges(raw) {
     if (raw == null) return null;
     let v = raw;
     if (typeof v === 'string') {
       try { v = JSON.parse(v); } catch { return null; }
     }
     if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
-    const left = Number(v.left);
-    const top = Number(v.top);
-    if (!Number.isFinite(left) || !Number.isFinite(top)) return null;
-    return { left, top };
+    // Legacy {left,top} from dual-FAB / absolute pixels often lands mid-page after
+    // a viewport change — ignore and fall back to bottom-right.
+    if (!Object.prototype.hasOwnProperty.call(v, 'right')
+      || !Object.prototype.hasOwnProperty.call(v, 'bottom')) {
+      return null;
+    }
+    const right = Number(v.right);
+    const bottom = Number(v.bottom);
+    if (!Number.isFinite(right) || !Number.isFinite(bottom)) return null;
+    return { right, bottom };
   }
 
   function loadAndApplyFabPosition() {
     if (!fabRoot) return;
     let saved = null;
     try {
-      saved = normalizeFabPos(storeGet(FAB_POS_KEY, null));
+      saved = normalizeFabEdges(storeGet(FAB_POS_KEY, null));
     } catch { /* ignore */ }
     if (saved) {
-      applyFabPosition(saved.left, saved.top);
-    } else {
-      // Drop corrupt / legacy values so later reads stay clean
-      try {
-        const raw = storeGet(FAB_POS_KEY, null);
-        if (raw != null && !normalizeFabPos(raw)) storeSet(FAB_POS_KEY, null);
-      } catch { /* ignore */ }
-      const d = defaultFabPosition();
-      applyFabPosition(d.left, d.top);
+      applyFabEdges(saved.right, saved.bottom);
+      return;
     }
+    // Drop corrupt / legacy left-top values so later reads stay clean
+    try {
+      const raw = storeGet(FAB_POS_KEY, null);
+      if (raw != null && !normalizeFabEdges(raw)) storeSet(FAB_POS_KEY, null);
+    } catch { /* ignore */ }
+    const d = defaultFabEdges();
+    applyFabEdges(d.right, d.bottom);
   }
 
   function persistFabPosition() {
@@ -3620,9 +3648,11 @@
       return;
     }
     if (!rect) return;
-    const pos = applyFabPosition(rect.left, rect.top);
-    if (!pos || !Number.isFinite(pos.left) || !Number.isFinite(pos.top)) return;
-    storeSet(FAB_POS_KEY, { left: pos.left, top: pos.top });
+    const right = window.innerWidth - rect.right;
+    const bottom = window.innerHeight - rect.bottom;
+    const pos = applyFabEdges(right, bottom);
+    if (!pos || !Number.isFinite(pos.right) || !Number.isFinite(pos.bottom)) return;
+    storeSet(FAB_POS_KEY, { right: pos.right, bottom: pos.bottom });
   }
 
   function setupFabDrag() {
@@ -3867,7 +3897,7 @@
         window.addEventListener('resize', () => {
           try {
             if (!fabRoot || !document.getElementById('sensebook-fab-root')) return;
-            persistFabPosition();
+            loadAndApplyFabPosition();
             if (isFabSheetOpen()) positionFabSheet();
           } catch { /* ignore */ }
         });
