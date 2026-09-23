@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609171620
+// @version      0.1.202609231400
 // @description  划词自动查询 / 翻译 / 加入生词本 / 存本并释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -20,6 +20,19 @@
 
 (function () {
   'use strict';
+
+  // FAB only on top window. Share pages (e.g. onorca) wrap content in a full-page
+  // iframe; @match *://*/* injects into both frames and used to paint two FABs.
+  // Selection / query still runs in every frame.
+  function isTopWindow() {
+    try {
+      if (window.top == null) return true;
+      return window.self === window.top;
+    } catch {
+      // Cross-origin parent: this frame is the usable top for our UI.
+      return true;
+    }
+  }
 
   // ---- safe GM_* wrappers (never throw if grant/polyfill missing) ----
   function gmGet(key, def) {
@@ -170,6 +183,7 @@
 
   function mountEmergencyFab() {
     try {
+      if (!isTopWindow()) return;
       if (document.getElementById('sensebook-fab-root')) return;
       const root = document.createElement('div');
       root.id = 'sensebook-fab-root';
@@ -3679,8 +3693,16 @@
   }
 
   function setupFab() {
-    // Re-attach path may reset fabRoot=null while a stale node is gone
-    if (fabRoot && document.getElementById('sensebook-fab-root')) return;
+    if (!isTopWindow()) return;
+    // Prefer live DOM over in-memory refs (second inject / re-attach).
+    const existing = document.getElementById('sensebook-fab-root');
+    if (existing) {
+      fabRoot = existing;
+      fabSheet = document.getElementById('sensebook-fab-sheet') || fabSheet;
+      fabHoverBridge = document.getElementById('sensebook-fab-hover-bridge') || fabHoverBridge;
+      fabButton = document.getElementById('sensebook-fab-button') || fabButton;
+      return;
+    }
     fabRoot = document.createElement('div');
     fabRoot.id = 'sensebook-fab-root';
     applyStyles(fabRoot, {
@@ -3767,6 +3789,7 @@
 
     fabButton = document.createElement('button');
     fabButton.type = 'button';
+    fabButton.id = 'sensebook-fab-button';
     fabButton.setAttribute('data-sensebook-fab', 'true');
     fabButton.setAttribute('aria-expanded', 'false');
     applyStyles(fabButton, {
@@ -3959,6 +3982,7 @@
 
   function ensureFabAttached() {
     try {
+      if (!isTopWindow()) return;
       if (!document.getElementById('sensebook-fab-root')) {
         fabRoot = null;
         fabSheet = null;
@@ -3974,11 +3998,13 @@
   }
 
   function startFabWatchdog() {
+    if (!isTopWindow()) return;
     try {
       setInterval(ensureFabAttached, 2000);
     } catch { /* ignore */ }
     try {
       const obs = new MutationObserver(() => {
+        if (!isTopWindow()) return;
         if (!document.getElementById('sensebook-fab-root')) {
           fabRoot = null;
           fabSheet = null;
