@@ -4,6 +4,7 @@
  *        node scripts/harness-fab.mjs --throw-menu
  *        node scripts/harness-fab.mjs --null-style
  *        node scripts/harness-fab.mjs --corrupt-fab-pos
+ *        node scripts/harness-fab.mjs --iframe
  */
 import fs from 'fs';
 import path from 'path';
@@ -14,6 +15,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const throwMenu = process.argv.includes('--throw-menu');
 const nullStyle = process.argv.includes('--null-style');
 const corruptFab = process.argv.includes('--corrupt-fab-pos');
+const iframeMode = process.argv.includes('--iframe');
 const scriptPath = path.join(__dirname, '../userscript/sensebook.user.js');
 let code = fs.readFileSync(scriptPath, 'utf8');
 code = code.replace(/\/\/ ==UserScript==[\s\S]*?\/\/ ==\/UserScript==\s*/, '');
@@ -162,11 +164,21 @@ sandbox.globalThis = sandbox;
 sandbox.window.matchMedia = sandbox.matchMedia;
 sandbox.window.innerWidth = 1280;
 sandbox.window.innerHeight = 800;
+sandbox.window.self = sandbox.window;
+sandbox.window.top = iframeMode ? { __otherTop: true } : sandbox.window;
 
 vm.createContext(sandbox);
 vm.runInContext(code, sandbox, { timeout: 5000 });
 
 const fab = document.getElementById('sensebook-fab-root');
+if (iframeMode) {
+  if (fab) {
+    console.error('FAIL: iframe mode should not mount #sensebook-fab-root');
+    process.exit(1);
+  }
+  console.log('PASS: iframe mode skipped FAB mount');
+  process.exit(0);
+}
 if (!fab) {
   console.error('FAIL: #sensebook-fab-root missing');
   if (alerts.length) console.error('alerts:', alerts);
