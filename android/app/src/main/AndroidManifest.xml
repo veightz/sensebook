@@ -12,6 +12,13 @@
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules">
 
+        <activity android:name=".VocabActivity" android:exported="true" android:label="Sensebook 生词本">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
         <!--
           Single Activity: system text selection → ACTION_PROCESS_TEXT.
           No launcher icon (v1). Share sheet / floating bubble / a11y out of scope.

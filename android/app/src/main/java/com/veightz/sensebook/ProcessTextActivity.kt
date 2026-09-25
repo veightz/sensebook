@@ -11,6 +11,7 @@ import androidx.lifecycle.lifecycleScope
 import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.textfield.TextInputEditText
 import com.veightz.sensebook.data.VocabStore
+import com.veightz.sensebook.data.SyncClient
 import com.veightz.sensebook.databinding.ActivityProcessTextBinding
 import com.veightz.sensebook.dict.LocalDict
 import com.veightz.sensebook.llm.DeepSeekClient
@@ -175,6 +176,11 @@ class ProcessTextActivity : AppCompatActivity() {
                 status = status
             )
         )
+        if (runCatching { SyncClient.account(this) }.getOrNull() != null) {
+            lifecycleScope.launch(Dispatchers.IO) {
+                runCatching { SyncClient.sync(applicationContext) }
+            }
+        }
         Toast.makeText(this, R.string.saved_toast, Toast.LENGTH_SHORT).show()
     }
 

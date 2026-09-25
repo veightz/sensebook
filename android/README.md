@@ -1,18 +1,17 @@
 # Sensebook Android
 
-Package: `com.veightz.sensebook` · `versionName` **0.1.1**  
-Entry: **system text selection → `ACTION_PROCESS_TEXT` only** (no floating bubble / accessibility / share sheet).
+Package: `com.veightz.sensebook` · `versionName` **0.2.0**
+Entries: system text selection (`ACTION_PROCESS_TEXT`) and launcher vocabulary book.
 
-## Milestone 2 (current)
+## Current capabilities
 
 | Done | Later |
 |------|-------|
-| DeepSeek dual-out: short word = local dict + model enrich in parallel; sentence = model only | Vocab list screen |
-| Model UI split **词义 / 搭配效果** (userscript enrich prompt) | Full 20k dict sync |
-| API Key in **EncryptedSharedPreferences** (on-device only) | Phonetics when dict field exists |
-| Editable settings: Key / Base URL / model / thinking (default off) | |
-| Save vocab with `source_app` when calling package available | |
-| PROCESS_TEXT entry kept | |
+| DeepSeek dual-out: short word = local dict + model enrich in parallel; sentence = model only | Full 20k dict sync |
+| Model UI split **词义 / 搭配效果** | Phonetics when dict field exists |
+| API Key and sync token in separate encrypted preferences | Physical-device QA and release signing |
+| Launcher vocabulary book: search, edit, delete, review, import/export | |
+| Cloudflare sync client: login/register, offline-first upload/pull, conflict copies | |
 
 Defaults align with userscript: Base `https://api.deepseek.com/v1`, model `deepseek-flash`, thinking disabled.
 
@@ -31,7 +30,9 @@ Defaults align with userscript: Base `https://api.deepseek.com/v1`, model `deeps
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-No launcher icon on purpose (PROCESS_TEXT-only).
+The launcher icon opens the vocabulary book. `PROCESS_TEXT` still opens the quick selection dialog.
+
+The API 36.1 emulator passed account registration, selection save → Cloudflare upload, remote pull, deletion tombstone, and review sync checks. Physical-device QA remains pending.
 
 ## How to test on device
 
@@ -44,6 +45,7 @@ No launcher icon on purpose (PROCESS_TEXT-only).
 5. Tap **DeepSeek 设置** → paste API Key → Save → model rows refresh.
 6. Select a **full sentence** → local row says 整句跳过; only model fills.
 7. **加入生词本** stores word + sense/collocation + `source_app` (package when available).
+8. Tap the app icon → **账号设置**. The deployed Cloudflare sync URL is prefilled; use the same email and password as the browser userscript, then tap **立即同步**. Search, edit, review, and delete are available from this screen.
 
 If Sensebook does not appear:
 
@@ -53,8 +55,8 @@ If Sensebook does not appear:
 
 ## Security
 
-- Never commit API keys. Prefs file is encrypted and excluded from cloud backup.
-- Key lives only on device (`EncryptedSharedPreferences`).
+- Never commit API keys or sync tokens. Both encrypted preference files are excluded from cloud backup.
+- DeepSeek Key remains only on device; it is not uploaded to the sync server.
 
 ## Dict asset
 

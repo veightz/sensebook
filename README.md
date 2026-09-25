@@ -1,10 +1,10 @@
 # Sensebook
 
-浏览器优先的划词词汇工具（中文界面）。在任意网页划词 → 翻译 / 加入生词本 / 存本并释义。
+浏览器优先的阅读词汇工具（中文界面）。在网页或 Android 划词 → 理解语境 → 存入生词本 → 跨端同步 → 复习。
 
-> **默认可不登录**：油猴脚本将词条保存在浏览器本地存储（`GM_setValue` / `localStorage`）。服务器与账号仅用于**可选**同步，不是 MVP 必需。
+> **默认可不登录**：词条先保存在设备本地。登录同一同步账号后，浏览器与 Android 通过 Cloudflare Worker / D1 互通；断网仍可保存与复习。
 
-本仓库为本地 MVP 脚手架：Tampermonkey 用户脚本（主路径）+ 可选 Node/Hono/SQLite 后端 + [`android/`](android/) PROCESS_TEXT 划词 MVP（Kotlin）+ [`macos/`](macos/) 菜单栏划词 MVP（Swift / SwiftUI）。
+本仓库包含 Tampermonkey 用户脚本、[`android/`](android/) 原生应用、[`macos/`](macos/) 菜单栏划词 MVP、Cloudflare 同步服务，以及保留的 Node/Hono/SQLite 原型。
 
 
 
@@ -42,7 +42,7 @@ Chrome 138+ 需要单独打开油猴的用户脚本权限，否则脚本显示�
    - **加入生词本** → 写入本地生词本（键名 `sensebook_entries`），**无需 API / Token**
    - **存本并释义** → 存入生词本，并生成语境「词义 / 搭配效果」（非干译）；已配置 DeepSeek Key 时直连模型，否则本地 stub；结果区与翻译布局区分显示
    - **朗读** → 浮层与生词本小喇叭，用浏览器 `speechSynthesis` 读单词/句子（无云端 TTS）
-4. 油猴菜单 / FAB：**「我的生词本」**、**「查询记录」**（本地缓存 `sensebook_query_cache`，约 250 条 LRU）、**「LLM 设置」**。也可从划词弹层的 **DeepSeek** / **我的生词本** 进入。
+4. 油猴菜单 / FAB：**「我的生词本」**（搜索、编辑、复习）、**「查询记录」**（本地缓存 `sensebook_query_cache`，约 250 条 LRU）、**「DeepSeek 设置」**、**「Sensebook 设置」**（账号同步、导入导出）。
 
 本地模式说明也会在菜单「关于本地模式」中提示。登录相关菜单标注为 **「登录/同步（可选）」**。
 
@@ -86,22 +86,23 @@ Chrome 138+ 需要单独打开油猴的用户脚本权限，否则脚本显示�
 
 > **安全提醒**：API Key 只存在你本机的油猴/`GM_setValue` 中，请勿提交到仓库或发给他人。
 
-可选同步用的「登录/同步 — API 地址 / Token」与 LLM 设置相互独立，不要混填到本面板。
+账号同步在「Sensebook 设置」里配置，与 DeepSeek Key 分开。
 
 
 
-## Android（PROCESS_TEXT · M2）
+## Android（划词 + 生词本）
 
-系统划词菜单入口（**仅** `ACTION_PROCESS_TEXT`；无悬浮球 / 无无障碍服务；分享页稍后）。`versionName` **0.1.1**。
+系统划词菜单入口使用 `ACTION_PROCESS_TEXT`；启动图标打开本地生词本，可搜索、编辑、复习、导入导出和登录同步。无悬浮球或无障碍服务。
 
 | | |
 |--|--|
 | 工程路径 | [`android/`](android/)（包名 `com.veightz.sensebook`） |
 | 双出 | 短词：本地词库 + DeepSeek 词义/搭配效果并行；整句：仅模型 |
 | Key | 本机 EncryptedSharedPreferences；设置里可改 Key / Base URL / 模型 / thinking |
+| 同步 | 账号令牌加密存储；划词保存后后台同步，生词本可手动同步 |
 | 打开方式 | Android Studio → **Open** → 选 `android/` 目录 |
 | 构建 | `cd android && ./gradlew :app:assembleDebug` → `app/build/outputs/apk/debug/app-debug.apk` |
-| 验证入口 | 安装 APK → 任意 App 长按选词 → **Sensebook** → 见本地+模型 |
+| 验证入口 | 安装 APK → 长按选词 → **Sensebook** → 保存；点启动图标打开生词本 |
 
 详情、里程碑与排障见 [`android/README.md`](android/README.md)。
 
@@ -118,45 +119,12 @@ Chrome 138+ 需要单独打开油猴的用户脚本权限，否则脚本显示�
 详见 [`macos/README.md`](macos/README.md)。
 
 
-## 可选：启动本地服务器（同步 / 词库页）
 
-若需要账号同步或 Web 词库页：
+## 跨端同步
 
-```bash
-# 1. 安装依赖
-npm install
+浏览器「Sensebook 设置 → 跨端同步」和 Android 生词本「账号设置」使用**同一个账号**。服务地址默认是已部署的 [Cloudflare 同步服务](https://sensebook-sync.veightz3161.workers.dev)，两端均可修改。首次登录会上传设备上已有的本地词条；之后本地修改先保存，再上传并按游标拉取另一端的修改。删除同步为墓碑，版本冲突保留本地副本。
 
-# 2. 配置环境（可选）
-cp .env.example .env
-# 编辑 JWT_SECRET；若需服务端真实 AI，填入 OPENAI_COMPATIBLE_BASE_URL / API_KEY / MODEL
-
-# 3. 启动服务
-npm run dev
-# 默认 http://127.0.0.1:8787
-```
-
-打开浏览器访问 http://127.0.0.1:8787 ，可注册并登录（可选）。登录后 Token 保存在浏览器 `localStorage`（键名 `sensebook_token`）。
-
-健康检查：
-
-```bash
-curl http://127.0.0.1:8787/health
-```
-
-油猴菜单中可填写（均为可选，与 LLM 无关）：
-
-- **登录/同步（可选）— API 地址** → 例如 `http://127.0.0.1:8787`
-- **登录/同步（可选）— Token** → 从词库页 Local Storage 复制 `sensebook_token`
-
-配置后，加入生词本会在本地保存之外**额外**尝试同步到服务器。
-
-也可临时用接口拿 Token：
-
-```bash
-curl -s -X POST http://127.0.0.1:8787/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"you@example.com","password":"yourpass"}'
-```
+同步服务采用 Cloudflare Worker + D1，已上线；本机联调与部署维护见 [同步开发与协议说明](docs/sync.md)。`server/` 与 `web/` 是旧 Node/SQLite 原型，账号和服务端记录不会自动迁到新服务。
 
 ## 测试流程
 
@@ -173,13 +141,12 @@ curl -s -X POST http://127.0.0.1:8787/auth/login \
 2. 划词 → **存本并释义** → 等待加载 → 本地词库出现中文搭配效果/词义，`status=ready`。
 3. 故意填错 Key → 应 toast 失败且词条 `status=failed`（词条仍保留）。
 
-### C. 可选服务端联调
+### C. 同步联调
 
-1. `npm run dev`，确认 `/health` 返回 `ok`（`llm` 字段表示是否配置了服务端 OPENAI_COMPATIBLE_*）。
-2. 打开 http://127.0.0.1:8787 注册并登录。
-3. 油猴配置可选 API + Token。
-4. 划词加入生词本后，本地列表与服务器词库页均可看到（服务器路径仍需登录）。
-5. `POST /entries/:id/enrich` 与油猴直连使用同一套 JSON 字段：`ai_sentence_gloss` / `ai_word_sense`。
+1. `npm run worker:migrate:local`，在 `.dev.vars` 设置本机 `JWT_SECRET`，运行 `npm run worker:dev -- --port 8788`。
+2. 运行 `npm run test:worker-sync` 与 `npm run test:userscript-sync`。
+3. 浏览器脚本在「Sensebook 设置」注册账号并同步；Android 在生词本「账号设置」登录同一账号。
+4. 分别在两端保存、编辑、复习和删除词条，手动同步后核对结果。
 
 ### 单元烟测（无需真实 Key）
 
@@ -188,26 +155,27 @@ npm test
 # 或 npm run test:llm-parse
 ```
 
-## API 一览（可选后端）
+## 同步 API 一览
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/health` | 健康检查 |
 | POST | `/auth/register` | 注册 `{email,password}` |
 | POST | `/auth/login` | 登录，返回 JWT |
-| GET/POST | `/entries` | 列表 / 创建（需 Bearer） |
-| GET/PATCH/DELETE | `/entries/:id` | 读写删 |
-| POST | `/entries/:id/enrich` | AI 搭配效果+词义 |
-| POST | `/translate` | 翻译 `{text}` |
+| GET | `/auth/me` | 当前账号（需 Bearer） |
+| PUT | `/sync/entries/:id` | 创建或按版本更新词条（需 Bearer） |
+| GET | `/sync/changes` | 游标分页拉取改动与删除墓碑（需 Bearer） |
 
-数据字段见 [docs/schema.md](docs/schema.md)。本地存储使用相同字段（无 `user_id`，`id` 由客户端生成）。
+数据字段见 [docs/schema.md](docs/schema.md)，同步行为见 [docs/sync.md](docs/sync.md)。
 
 ## 目录结构
 
 ```
 docs/schema.md                    # 数据模型（含本地优先说明）
 server/                           # Hono API + SQLite（可选）
-web/index.html                    # 词库页（可选；支持未登录时浏览本页 localStorage）
+web/index.html                    # 旧 Node/SQLite 原型页面
+worker/                           # Cloudflare Worker + D1 迁移（跨端同步）
+wrangler.jsonc                    # Worker 配置；D1 ID 上线前替换
 userscript/sensebook.user.js      # 主路径：本地优先划词 + 本地词库/模型双出
 userscript/dict/en-zh-common.json # 半量 EN→ZH 本地词库（dict version ≠ @version）
 userscript/dict/SOURCE.md         # 词库来源与许可（ECDICT MIT）
@@ -215,12 +183,14 @@ android/                          # PROCESS_TEXT 划词 MVP（Kotlin）
 macos/                            # 菜单栏划词 MVP（Swift / SwiftUI，需 Mac+Xcode）
 scripts/build-en-zh-dict.py       # 从 ECDICT 构建词库子集
 scripts/test-llm-parse.mjs        # prompt / JSON 解析烟测
+scripts/test-worker-sync.mjs      # 同步接口集成测试
+scripts/test-userscript-sync.mjs  # 浏览器本地与同步集成测试
 .env.example
 ```
 
 ## 环境变量
 
-见 `.env.example`。未配置 `OPENAI_COMPATIBLE_*` 时，服务端 enrich / translate 返回 stub 文本；油猴在无 LLM Key 时使用客户端 stub，有 Key 时直连供应商。
+Worker 的 `JWT_SECRET` 用 Wrangler secret 管理；本机使用被忽略的 `.dev.vars`。旧 Node 原型的环境变量见 `.env.example`。DeepSeek Key 始终只保存在各设备，不经同步服务。
 
 ## 许可
 

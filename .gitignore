@@ -9,6 +9,8 @@ dist/
 .vscode/
 *.log
 /data/
+.wrangler/
+.dev.vars*
 
 # Android
 android/.gradle/

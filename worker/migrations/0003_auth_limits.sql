@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS auth_limits (
+  key TEXT PRIMARY KEY,
+  attempts INTEGER NOT NULL,
+  reset_at INTEGER NOT NULL
+);

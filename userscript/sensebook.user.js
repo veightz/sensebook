@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609231430
+// @version      0.1.202609251331
 // @description  划词自动查询 / 翻译 / 加入生词本 / 存本并释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -227,7 +227,13 @@
   try { // sensebook-main
     const ENTRIES_KEY = 'sensebook_entries';
   const API_URL_KEY = 'sensebook_api_url';
+  const DEFAULT_SYNC_URL = 'https://sensebook-sync.veightz3161.workers.dev';
   const TOKEN_KEY = 'sensebook_token';
+  const SYNC_USER_KEY = 'sensebook_sync_user_id';
+  const SYNC_CURSOR_KEY = 'sensebook_sync_cursor';
+  const SYNC_LAST_KEY = 'sensebook_sync_last_at';
+  let syncTimer = null;
+  let syncPromise = null;
   // LLM settings (local-only; separate from optional server sync)
   const LLM_BASE_URL_KEY = 'sensebook_llm_base_url';
   const LLM_API_KEY_KEY = 'sensebook_llm_api_key';
@@ -311,7 +317,7 @@
 
   function getApiUrl() {
     const v = storeGet(API_URL_KEY, '');
-    return (typeof v === 'string' ? v : '').replace(/\/$/, '');
+    return (typeof v === 'string' && v ? v : DEFAULT_SYNC_URL).replace(/\/$/, '');
   }
 
   function getToken() {
@@ -592,7 +598,7 @@
     });
   }
 
-  function loadEntries() {
+  function loadAllEntries() {
     const raw = storeGet(ENTRIES_KEY, []);
     if (Array.isArray(raw)) return raw;
     if (typeof raw === 'string') {
@@ -606,35 +612,87 @@
     return [];
   }
 
+  function loadEntries() {
+    return loadAllEntries().filter((entry) => !entry.deleted_at);
+  }
+
   function saveEntries(list) {
     storeSet(ENTRIES_KEY, list);
   }
 
   function patchLocalEntry(id, patch) {
-    const list = loadEntries();
+    const list = loadAllEntries();
     const idx = list.findIndex((x) => x.id === id);
     if (idx < 0) return null;
-    list[idx] = { ...list[idx], ...patch };
+    list[idx] = { ...list[idx], ...patch, updated_at: new Date().toISOString(), sync_dirty: true };
     saveEntries(list);
+    scheduleSync();
     return list[idx];
+  }
+
+  function deleteLocalEntry(id) {
+    const list = loadAllEntries();
+    const idx = list.findIndex((entry) => entry.id === id && !entry.deleted_at);
+    if (idx < 0) return false;
+    const now = new Date().toISOString();
+    list[idx] = { ...list[idx], deleted_at: now, updated_at: now, sync_dirty: true };
+    saveEntries(list);
+    scheduleSync();
+    return true;
+  }
+
+  function reviewLocalEntry(id, remembered) {
+    const entry = loadAllEntries().find((item) => item.id === id && !item.deleted_at);
+    if (!entry) return;
+    const repetitions = remembered ? (Number(entry.review_repetitions) || 0) + 1 : 0;
+    const interval = !remembered ? 1 : repetitions === 1 ? 1 : repetitions === 2 ? 3 :
+      Math.min(365, Math.max(3, Number(entry.review_interval_days) || 3) * 2);
+    const now = new Date();
+    patchLocalEntry(id, {
+      review_repetitions: repetitions,
+      review_interval_days: interval,
+      review_last_at: now.toISOString(),
+      review_due_at: new Date(now.getTime() + interval * 86400000).toISOString(),
+    });
+  }
+
+  function isEntryDue(entry) {
+    if (!entry.review_due_at) return true;
+    const due = Date.parse(entry.review_due_at);
+    return !Number.isFinite(due) || due <= Date.now();
   }
 
   function createLocalEntry({ word, sentence, source_url, status }) {
     const now = new Date().toISOString();
+    const list = loadAllEntries();
+    const existing = list.find((entry) => !entry.deleted_at &&
+      normalizeWord(entry.word) === normalizeWord(word) &&
+      String(entry.sentence || '').trim() === String(sentence || word || '').trim() &&
+      String(entry.source_url || '') === String(source_url || ''));
+    if (existing) return existing;
     const entry = {
       id: uuid(),
       word: word || '',
       sentence: sentence || word || '',
       ai_sentence_gloss: null,
       ai_word_sense: null,
+      translation: null,
       source_url: source_url || '',
+      source_app: '',
       tags: [],
       status: status || 'pending_ai',
       created_at: now,
+      updated_at: now,
+      deleted_at: null,
+      review_due_at: null,
+      review_interval_days: 0,
+      review_repetitions: 0,
+      review_last_at: null,
+      sync_dirty: true,
     };
-    const list = loadEntries();
     list.unshift(entry);
     saveEntries(list);
+    scheduleSync();
     return entry;
   }
 
@@ -1959,6 +2017,7 @@
     font-size: 13px;
     color: #047857;
   }
+  .text-input { width: 100%; min-height: 42px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 10px; font: inherit; }
 </style>
 <div class="card" role="dialog" aria-label="Sensebook 设置">
   <h2>Sensebook 设置</h2>
@@ -1988,7 +2047,28 @@
     <div class="hint" style="margin-top:4px;">默认开启：自动查询成功后写入生词本；关闭后只展示、不自动入库。</div>
   </div>
 
+  <div class="mode-box">
+    <div style="font-weight:700;font-size:14px;">跨端同步</div>
+    <div class="hint">浏览器与 Android 使用同一账号。首次同步会上传已有本地词条。</div>
+    <label for="syncUrl">同步服务地址</label>
+    <input class="text-input" id="syncUrl" type="url" placeholder="https://sensebook-sync.example.workers.dev" />
+    <label for="syncEmail">邮箱</label>
+    <input class="text-input" id="syncEmail" type="email" autocomplete="username" />
+    <label for="syncPassword">密码</label>
+    <input class="text-input" id="syncPassword" type="password" autocomplete="current-password" />
+    <div class="actions" style="margin-top:10px;">
+      <button type="button" class="primary" id="syncLogin">登录</button>
+      <button type="button" class="primary" id="syncRegister">注册</button>
+      <button type="button" class="primary" id="syncNow">立即同步</button>
+      <button type="button" id="syncLogout">退出登录</button>
+    </div>
+    <div class="status" id="syncStatus"></div>
+  </div>
+
   <div class="actions">
+    <button type="button" id="exportEntries">导出词条</button>
+    <button type="button" id="importEntries">导入词条</button>
+    <input type="file" id="importFile" accept="application/json,.json" hidden />
     <button type="button" class="primary" id="save">保存</button>
     <button type="button" class="ghost" id="close">关闭</button>
   </div>
@@ -2008,6 +2088,8 @@
     if (modeSenseInput) modeSenseInput.checked = curMode === AUTO_QUERY_MODE_SENSE;
     if (modeTranslateInput) modeTranslateInput.checked = curMode === AUTO_QUERY_MODE_TRANSLATE;
     if (autoSaveVocabInput) autoSaveVocabInput.checked = isAutoSaveVocabEnabled();
+    $('syncUrl').value = getApiUrl();
+    $('syncEmail').value = storeGet('sensebook_sync_email', '') || '';
 
     const card = shadow.querySelector('.card');
     card.addEventListener('click', (e) => e.stopPropagation());
@@ -2026,6 +2108,77 @@
       if (autoSaveVocabInput) setAutoSaveVocabEnabled(!!autoSaveVocabInput.checked);
       statusEl.textContent = '已保存（本机）。';
       toast('Sensebook 设置已保存');
+    };
+
+    const syncStatus = $('syncStatus');
+    async function doAuth(register) {
+      try {
+        storeSet(API_URL_KEY, validateSyncUrl($('syncUrl').value.trim()));
+        const user = await syncAccount($('syncEmail').value.trim(), $('syncPassword').value, register);
+        $('syncPassword').value = '';
+        storeSet('sensebook_sync_email', user.email);
+        syncStatus.textContent = '已登录 ' + user.email + '，正在同步…';
+        const result = await syncNow();
+        syncStatus.textContent = `同步完成：上传 ${result.uploaded}，更新 ${result.downloaded}。`;
+      } catch (error) {
+        syncStatus.textContent = error.message || String(error);
+      }
+    }
+    $('syncLogin').onclick = () => doAuth(false);
+    $('syncRegister').onclick = () => doAuth(true);
+    $('syncNow').onclick = async () => {
+      try {
+        storeSet(API_URL_KEY, validateSyncUrl($('syncUrl').value.trim()));
+        syncStatus.textContent = '同步中…';
+        const result = await syncNow();
+        syncStatus.textContent = `同步完成：上传 ${result.uploaded}，更新 ${result.downloaded}。`;
+      } catch (error) {
+        syncStatus.textContent = error.message || String(error);
+      }
+    };
+    $('syncLogout').onclick = () => {
+      storeSet(TOKEN_KEY, '');
+      syncStatus.textContent = '已退出。设备上的词条仍保留。';
+    };
+    $('exportEntries').onclick = () => {
+      const payload = JSON.stringify({ format: 'sensebook-entries-v1', exported_at: new Date().toISOString(), entries: loadAllEntries() }, null, 2);
+      const href = URL.createObjectURL(new Blob([payload], { type: 'application/json' }));
+      const link = document.createElement('a');
+      link.href = href;
+      link.download = 'sensebook-entries-' + new Date().toISOString().slice(0, 10) + '.json';
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(href), 1000);
+      syncStatus.textContent = '词条已导出。';
+    };
+    $('importEntries').onclick = () => $('importFile').click();
+    $('importFile').onchange = async () => {
+      const file = $('importFile').files && $('importFile').files[0];
+      if (!file) return;
+      try {
+        if (file.size > 10 * 1024 * 1024) throw new Error('文件过大');
+        const parsed = JSON.parse(await file.text());
+        const source = Array.isArray(parsed) ? parsed : parsed.entries;
+        if (!Array.isArray(source)) throw new Error('不是 Sensebook 词条文件');
+        const list = loadAllEntries();
+        const ids = new Set(list.map((entry) => entry.id));
+        let count = 0;
+        for (const raw of source) {
+          if (!raw || typeof raw !== 'object' || !String(raw.word || '').trim()) continue;
+          const id = /^[a-zA-Z0-9_-]{8,80}$/.test(raw.id || '') ? raw.id : uuid();
+          if (ids.has(id)) continue;
+          const now = new Date().toISOString();
+          list.push({ ...raw, id, word: String(raw.word).slice(0, 200), sentence: String(raw.sentence || raw.word).slice(0, 4000),
+            tags: Array.isArray(raw.tags) ? raw.tags : [], created_at: raw.created_at || now,
+            updated_at: now, sync_revision: null, sync_dirty: true });
+          ids.add(id);
+          count++;
+        }
+        saveEntries(list);
+        scheduleSync();
+        syncStatus.textContent = '已导入 ' + count + ' 条。';
+      } catch (error) {
+        syncStatus.textContent = '导入失败：' + (error.message || String(error));
+      }
     };
 
     document.documentElement.appendChild(host);
@@ -2316,9 +2469,15 @@
     document.documentElement.appendChild(panel);
   }
 
-    function showLocalPanel() {
+    function showLocalPanel(filterText = '', dueOnly = false) {
     hidePanel();
-    const entries = loadEntries();
+    const allEntries = loadEntries();
+    const term = String(filterText || '').trim().toLowerCase();
+    const entries = allEntries.filter((entry) =>
+      (!dueOnly || isEntryDue(entry)) &&
+      (!term || [entry.word, entry.sentence, entry.ai_word_sense, entry.ai_sentence_gloss,
+        ...(Array.isArray(entry.tags) ? entry.tags : [])]
+        .some((value) => String(value || '').toLowerCase().includes(term))));
     panel = document.createElement('div');
     panel.id = 'sensebook-panel';
     applyStyles(panel, {
@@ -2350,7 +2509,7 @@
     const llmHint = hasLlmConfig() ? 'LLM 已配置' : '未配置 LLM Key';
     header.innerHTML = `<div>
       <div style="font-weight:700;font-size:16px;">我的生词本（本地）</div>
-      <div style="font-size:12px;color:#64748b;margin-top:2px;">无需登录 · ${llmHint} · 共 ${entries.length} 条</div>
+      <div style="font-size:12px;color:#64748b;margin-top:2px;">无需登录 · ${llmHint} · 共 ${allEntries.length} 条 · 待复习 ${allEntries.filter(isEntryDue).length} 条</div>
     </div>`;
     const headerActions = document.createElement('div');
     applyStyles(headerActions, {
@@ -2416,6 +2575,29 @@
     header.appendChild(headerActions);
     panel.appendChild(header);
 
+    const filters = document.createElement('div');
+    applyStyles(filters, { padding: '10px 12px', background: '#fff', borderBottom: '1px solid #e2e8f0', display: 'flex', gap: '6px', alignItems: 'center' });
+    const search = document.createElement('input');
+    search.type = 'search';
+    search.value = filterText;
+    search.placeholder = '搜索单词、句子、释义或标签';
+    applyStyles(search, { flex: '1', minWidth: '0', minHeight: '38px', border: '1px solid #cbd5e1', borderRadius: '8px', padding: '6px' });
+    const applyFilter = () => showLocalPanel(search.value, dueCheckbox.checked);
+    search.addEventListener('keydown', (event) => { if (event.key === 'Enter') applyFilter(); });
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.textContent = '搜索';
+    go.onclick = applyFilter;
+    const dueLabel = document.createElement('label');
+    dueLabel.textContent = '待复习';
+    const dueCheckbox = document.createElement('input');
+    dueCheckbox.type = 'checkbox';
+    dueCheckbox.checked = dueOnly;
+    dueCheckbox.onchange = applyFilter;
+    dueLabel.prepend(dueCheckbox);
+    filters.appendChild(search); filters.appendChild(go); filters.appendChild(dueLabel);
+    panel.appendChild(filters);
+
     const body = document.createElement('div');
     applyStyles(body, {
       overflow: 'auto',
@@ -2441,9 +2623,14 @@
           ${e.ai_word_sense ? `<div style="font-size:12px;color:#475569;margin-top:4px;"><strong>词义：</strong>${escapeHtml(e.ai_word_sense)}</div>` : ''}
           ${e.ai_sentence_gloss ? `<div style="font-size:12px;color:#475569;margin-top:4px;"><strong>搭配效果：</strong>${escapeHtml(e.ai_sentence_gloss)}</div>` : ''}
           <div style="font-size:11px;color:#94a3b8;margin-top:8px;">${escapeHtml(e.created_at || '')}</div>
+          <div style="font-size:11px;color:#64748b;margin-top:4px;">${e.review_due_at ? '下次复习：' + escapeHtml(e.review_due_at.slice(0, 10)) : '尚未复习'}</div>
+          ${Array.isArray(e.tags) && e.tags.length ? `<div style="font-size:11px;color:#64748b;margin-top:4px;">标签：${escapeHtml(e.tags.join('、'))}</div>` : ''}
           ${renderSourceUrlHtml(e.source_url)}
           <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
             <button type="button" data-enrich-local="${escapeHtml(e.id)}" style="min-height:36px;padding:6px 10px;border:none;border-radius:8px;background:#7c3aed;color:#fff;cursor:pointer;font-size:13px;">存本并释义</button>
+            <button type="button" data-review-remember="${escapeHtml(e.id)}" style="min-height:36px;padding:6px 10px;border:none;border-radius:8px;background:#059669;color:#fff;cursor:pointer;font-size:13px;">记住</button>
+            <button type="button" data-review-forget="${escapeHtml(e.id)}" style="min-height:36px;padding:6px 10px;border:none;border-radius:8px;background:#d97706;color:#fff;cursor:pointer;font-size:13px;">没记住</button>
+            <button type="button" data-edit-local="${escapeHtml(e.id)}" style="min-height:36px;padding:6px 10px;border:none;border-radius:8px;background:#475569;color:#fff;cursor:pointer;font-size:13px;">编辑</button>
             <button type="button" data-del-local="${escapeHtml(e.id)}" style="min-height:36px;padding:6px 10px;border:none;border-radius:8px;background:#dc2626;color:#fff;cursor:pointer;font-size:13px;">删除</button>
           </div>
         </div>
@@ -2464,7 +2651,29 @@
         return;
       }
       const enrichId = ev.target.getAttribute && ev.target.getAttribute('data-enrich-local');
+      const rememberId = ev.target.getAttribute && ev.target.getAttribute('data-review-remember');
+      const forgetId = ev.target.getAttribute && ev.target.getAttribute('data-review-forget');
+      const editId = ev.target.getAttribute && ev.target.getAttribute('data-edit-local');
       const delId = ev.target.getAttribute && ev.target.getAttribute('data-del-local');
+      if (rememberId || forgetId) {
+        reviewLocalEntry(rememberId || forgetId, !!rememberId);
+        showLocalPanel(filterText, dueOnly);
+        return;
+      }
+      if (editId) {
+        const entry = loadEntries().find((item) => item.id === editId);
+        if (!entry) return;
+        const word = prompt('修改单词', entry.word);
+        if (word == null || !word.trim()) return;
+        const sentence = prompt('修改语境句子', entry.sentence);
+        if (sentence == null) return;
+        const tags = prompt('标签（逗号分隔）', Array.isArray(entry.tags) ? entry.tags.join(', ') : '');
+        if (tags == null) return;
+        patchLocalEntry(editId, { word: word.trim().slice(0, 200), sentence: sentence.trim().slice(0, 4000),
+          tags: tags.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean).slice(0, 20) });
+        showLocalPanel(filterText, dueOnly);
+        return;
+      }
       if (enrichId) {
         if (busy) return;
         const list = loadEntries();
@@ -2490,14 +2699,14 @@
           toast('存本并释义失败：' + (err.message || String(err)));
         } finally {
           busy = false;
-          showLocalPanel();
+          showLocalPanel(filterText, dueOnly);
         }
       }
       if (delId) {
         if (!confirm('确认删除该本地词条？')) return;
-        saveEntries(loadEntries().filter((x) => x.id !== delId));
+        deleteLocalEntry(delId);
         toast('已删除');
-        showLocalPanel();
+        showLocalPanel(filterText, dueOnly);
       }
     });
 
@@ -2559,6 +2768,156 @@
     const t = getToken();
     if (!t) throw new Error('未配置 Token');
     return { Authorization: 'Bearer ' + t };
+  }
+
+  function validateSyncUrl(url) {
+    const parsed = new URL(url);
+    const local = ['127.0.0.1', 'localhost', '10.0.2.2'].includes(parsed.hostname);
+    if (parsed.protocol !== 'https:' && !(local && parsed.protocol === 'http:')) {
+      throw new Error('同步地址必须使用 HTTPS（本机联调除外）');
+    }
+    if (parsed.username || parsed.password || parsed.search || parsed.hash || (parsed.pathname && parsed.pathname !== '/')) {
+      throw new Error('请输入不带账号、参数的服务根地址');
+    }
+    return parsed.origin;
+  }
+
+  function syncComparable(entry) {
+    const fields = [
+      'word', 'sentence', 'translation', 'ai_word_sense', 'ai_sentence_gloss',
+      'source_url', 'source_app', 'tags', 'status', 'deleted_at',
+      'review_due_at', 'review_interval_days', 'review_repetitions', 'review_last_at',
+    ];
+    return JSON.stringify(fields.map((field) => {
+      if (field === 'tags') return Array.isArray(entry.tags) ? entry.tags : [];
+      if (field === 'review_interval_days' || field === 'review_repetitions') return Number(entry[field]) || 0;
+      if (field === 'deleted_at' || field === 'review_due_at' || field === 'review_last_at') return entry[field] || null;
+      return entry[field] == null ? '' : entry[field];
+    }));
+  }
+
+  function replaceSyncedEntry(remote, force = false) {
+    const list = loadAllEntries();
+    const idx = list.findIndex((entry) => entry.id === remote.id);
+    if (idx >= 0 && list[idx].sync_dirty && !force) return false;
+    const next = { ...remote, sync_revision: remote.revision, sync_dirty: false };
+    if (idx >= 0) list[idx] = next;
+    else list.unshift(next);
+    saveEntries(list);
+    return true;
+  }
+
+  function saveConflictCopy(local, remote) {
+    const list = loadAllEntries();
+    const idx = list.findIndex((entry) => entry.id === local.id);
+    const copy = {
+      ...local,
+      id: uuid(),
+      tags: [...new Set([...(Array.isArray(local.tags) ? local.tags : []), '同步冲突'])],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      sync_revision: null,
+      sync_dirty: true,
+    };
+    if (idx >= 0) list[idx] = { ...remote, sync_revision: remote.revision, sync_dirty: false };
+    list.unshift(copy);
+    saveEntries(list);
+    scheduleSync();
+  }
+
+  async function performSync() {
+    if (!hasOptionalApi()) throw new Error('请先登录同步账号');
+    const api = validateSyncUrl(getApiUrl());
+    const owner = storeGet(SYNC_USER_KEY, '');
+    if (!owner) throw new Error('请在同步设置中重新登录，以确认账号');
+    let uploaded = 0;
+    const pending = loadAllEntries().filter((entry) => entry.sync_dirty || !entry.sync_revision);
+    for (const original of pending) {
+      const current = loadAllEntries().find((entry) => entry.id === original.id);
+      if (!current || (!current.sync_dirty && current.sync_revision)) continue;
+      const response = await gmRequest(api + '/sync/entries/' + encodeURIComponent(current.id), {
+        method: 'PUT', headers: authHeaders(),
+        body: { entry: current, base_revision: current.sync_revision || null },
+      });
+      if (response.status === 409 && response.data && response.data.entry) {
+        const remote = response.data.entry;
+        const latest = loadAllEntries().find((entry) => entry.id === current.id) || current;
+        if (syncComparable(latest) === syncComparable(remote)) replaceSyncedEntry(remote, true);
+        else saveConflictCopy(latest, remote);
+        continue;
+      }
+      if (response.status < 200 || response.status >= 300 || !response.data || !response.data.entry) {
+        throw new Error((response.data && response.data.error) || '上传失败：HTTP ' + response.status);
+      }
+      const latest = loadAllEntries().find((entry) => entry.id === current.id);
+      if (latest && latest.updated_at !== current.updated_at) {
+        const list = loadAllEntries();
+        const idx = list.findIndex((entry) => entry.id === current.id);
+        if (idx >= 0) {
+          list[idx] = { ...list[idx], sync_revision: response.data.entry.revision, sync_dirty: true };
+          saveEntries(list);
+          scheduleSync();
+        }
+      } else {
+        replaceSyncedEntry(response.data.entry, true);
+      }
+      uploaded++;
+    }
+
+    let cursor = Number(storeGet(SYNC_CURSOR_KEY, 0)) || 0;
+    let downloaded = 0;
+    for (let pageNo = 0; pageNo < 200; pageNo++) {
+      const { data } = await gmFetch(api + '/sync/changes?after=' + cursor + '&limit=200', { headers: authHeaders() });
+      if (!Array.isArray(data.changes)) throw new Error('同步响应格式错误');
+      for (const change of data.changes) {
+        if (replaceSyncedEntry(change.entry)) downloaded++;
+      }
+      cursor = Number(data.cursor) || cursor;
+      storeSet(SYNC_CURSOR_KEY, cursor);
+      if (!data.has_more) break;
+      if (pageNo === 199) throw new Error('同步数据过多，请再次同步');
+    }
+    storeSet(SYNC_LAST_KEY, Date.now());
+    return { uploaded, downloaded };
+  }
+
+  function syncNow() {
+    if (syncPromise) return syncPromise;
+    syncPromise = performSync().finally(() => { syncPromise = null; });
+    return syncPromise;
+  }
+
+  function scheduleSync() {
+    if (!hasOptionalApi() || !storeGet(SYNC_USER_KEY, '')) return;
+    if (syncTimer) clearTimeout(syncTimer);
+    syncTimer = setTimeout(() => {
+      syncTimer = null;
+      syncNow().catch((error) => {
+        try { console.warn('[Sensebook] 同步失败', error.message || error); } catch { /* ignore */ }
+      });
+    }, 2000);
+  }
+
+  function maybeBackgroundSync() {
+    if (!hasOptionalApi() || !storeGet(SYNC_USER_KEY, '')) return;
+    if (Date.now() - (Number(storeGet(SYNC_LAST_KEY, 0)) || 0) < 60 * 1000) return;
+    syncNow().catch(() => {});
+  }
+
+  async function syncAccount(email, password, register) {
+    const api = validateSyncUrl(getApiUrl());
+    const { data } = await gmFetch(api + (register ? '/auth/register' : '/auth/login'), {
+      method: 'POST', body: { email, password },
+    });
+    if (!data.user || !data.user.id || !data.token) throw new Error('登录响应格式错误');
+    const owner = storeGet(SYNC_USER_KEY, '');
+    if (owner && owner !== data.user.id) {
+      throw new Error('本机词库已关联另一账号；请先导出并清理后再切换账号');
+    }
+    storeSet(SYNC_USER_KEY, data.user.id);
+    storeSet(TOKEN_KEY, data.token);
+    if (!owner) storeSet(SYNC_CURSOR_KEY, 0);
+    return data.user;
   }
 
   /**
@@ -2642,40 +3001,9 @@
   }
 
   async function optionalServerEnrich(entry) {
-    try {
-      const createdRes = await gmFetch(getApiUrl() + '/entries', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: {
-          word: entry.word,
-          sentence: entry.sentence,
-          source_url: entry.source_url,
-          ai_sentence_gloss: entry.ai_sentence_gloss,
-          ai_word_sense: entry.ai_word_sense,
-          status: entry.status || 'ready',
-        },
-      });
-      const created = createdRes.data;
-      if (created && created.id && !(entry.ai_sentence_gloss && entry.ai_word_sense)) {
-        const enrichedRes = await gmFetch(getApiUrl() + '/entries/' + created.id + '/enrich', {
-          method: 'POST',
-          headers: authHeaders(),
-          body: {},
-        });
-        const enriched = enrichedRes.data;
-        const ent = enriched.entry || enriched;
-        return {
-          ai_sentence_gloss: ent.ai_sentence_gloss || created.ai_sentence_gloss,
-          ai_word_sense: ent.ai_word_sense || created.ai_word_sense,
-        };
-      }
-      return {
-        ai_sentence_gloss: entry.ai_sentence_gloss || created.ai_sentence_gloss,
-        ai_word_sense: entry.ai_word_sense || created.ai_word_sense,
-      };
-    } catch {
-      return null;
-    }
+    void entry;
+    await syncNow();
+    return null;
   }
 
   function formatCacheResult(rec) {
@@ -2933,16 +3261,7 @@
                 ai_word_sense: record.ai_word_sense,
                 status: 'ready',
               });
-              if (hasOptionalApi()) {
-                try {
-                  await optionalServerEnrich({
-                    ...entry,
-                    ai_sentence_gloss: record.ai_sentence_gloss,
-                    ai_word_sense: record.ai_word_sense,
-                    status: 'ready',
-                  });
-                } catch { /* ignore sync errors on silent auto-save */ }
-              }
+              if (hasOptionalApi()) syncNow().catch(() => {});
             } catch { /* ignore auto-save errors */ }
           }
         } catch (e) {
@@ -3024,19 +3343,7 @@
             patchLocalEntry(entry.id, patch);
             // Mirror manual「加入生词本」sync — do not call optionalServerEnrich
             // (that path would trigger server sense enrich for translation-only saves).
-            if (hasOptionalApi()) {
-              try {
-                await gmFetch(getApiUrl() + '/entries', {
-                  method: 'POST',
-                  headers: authHeaders(),
-                  body: {
-                    word: entry.word,
-                    sentence: entry.sentence,
-                    source_url: entry.source_url,
-                  },
-                });
-              } catch { /* ignore sync errors on silent auto-save */ }
-            }
+            if (hasOptionalApi()) syncNow().catch(() => {});
           } catch { /* ignore auto-save errors */ }
         }
       } catch (e) {
@@ -3066,12 +3373,8 @@
         });
         if (hasOptionalApi()) {
           try {
-            await gmFetch(getApiUrl() + '/entries', {
-              method: 'POST',
-              headers: authHeaders(),
-              body: { word: entry.word, sentence: entry.sentence, source_url: entry.source_url },
-            });
-            toast('已加入生词本（并已可选同步）：' + entry.word);
+            await syncNow();
+            toast('已加入生词本（已同步）：' + entry.word);
           } catch (syncErr) {
             toast('已加入生词本（同步失败：' + syncErr.message + '）：' + entry.word);
           }
@@ -3961,26 +4264,7 @@
       gmMenu('Sensebook：Sensebook 设置', () => {
         showAppSettingsPanel();
       });
-      gmMenu('Sensebook：登录/同步（可选）— API 地址', () => {
-        const cur = getApiUrl();
-        const v = prompt(
-          '【可选】Sensebook API 地址\n本地模式无需填写。填写后用于可选同步/在线翻译。\n例如 http://127.0.0.1:8787',
-          cur || 'http://127.0.0.1:8787'
-        );
-        if (v != null) storeSet(API_URL_KEY, v.trim());
-      });
-      gmMenu('Sensebook：登录/同步（可选）— Token', () => {
-        const cur = getToken();
-        const v = prompt(
-          '【可选】JWT Token（网页登录后复制）\n加入生词本不需要 Token。',
-          cur
-        );
-        if (v != null) storeSet(TOKEN_KEY, v.trim());
-      });
-      gmMenu('Sensebook：清除可选 Token', () => {
-        storeSet(TOKEN_KEY, '');
-        toast('已清除 Token（本地词库不受影响）');
-      });
+      gmMenu('Sensebook：跨端同步', () => showAppSettingsPanel());
       gmMenu('Sensebook：刷新本地词库', async () => {
         try {
           toast('正在下载本地词库…');
@@ -4063,6 +4347,8 @@
   registerSensebookMenus();
   try { ensureLocalDict(); } catch { /* ignore */ }
   startFabWatchdog();
+  setTimeout(maybeBackgroundSync, 2500);
+  setInterval(maybeBackgroundSync, 5 * 60 * 1000);
 
   // Expose parse helpers for optional page-console smoke (no export in userscript)
   try {

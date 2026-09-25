@@ -130,6 +130,8 @@ const sandbox = {
   clearTimeout() {},
   setInterval() { return 0; },
   clearInterval() {},
+  addEventListener() {},
+  removeEventListener() {},
   alert: (m) => { alerts.push(String(m)); },
   prompt: () => null,
   confirm: () => false,
