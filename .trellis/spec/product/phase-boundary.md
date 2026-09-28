@@ -14,9 +14,10 @@
 ## 下一阶段必做（对齐 Beads）
 
 1. **Mac 真机稳** — Beads `sensebook-djd.2`：真机验证 M1 并修问题  
-2. **跨端生词本 UI** — Beads `sensebook-efc`：在 Mac 真机稳之后推进
+2. **油猴音标** — Beads `sensebook-aw2`：ECDICT 音标进词库 + 含义旁显示（可与 1 并行或紧挨其后，不挡 Mac）  
+3. **跨端生词本 UI** — Beads `sensebook-efc`：在 Mac 真机稳之后推进（音标不挡此项启动条件，但序上在音标之后或并行收尾）
 
-顺序：先 1 后 2。
+顺序：1 优先；2 可并行；再 3。
 
 ## 默认可不登录
 
@@ -28,9 +29,9 @@
 - Google 等 OAuth（现阶段不推荐作主登录）
 - Mac 接同步登录
 - OCR（`sensebook-13d`）、多引擎（`sensebook-ue7`）、悬浮球（`sensebook-sf2`）
-- 油猴 UI 清亮化/多服务商（`sensebook-0cy`）、音标小改（`sensebook-aw2`）
+- 油猴 UI 清亮化/多服务商（`sensebook-0cy`）
 - Mac 可配置热键 UI（`sensebook-djd.1`）、与油猴设置对齐属 Mac epic 内后续（`sensebook-djd.3`）
 
 ## 验收口诀
 
-本阶段 PR 应服务「Mac 真机可用」或「生词本 UI」；插队 OTP/OAuth/OCR/多引擎/悬浮球一律后置。
+本阶段 PR 应服务「Mac 真机可用」「油猴音标」或「生词本 UI」；插队 OTP/OAuth/OCR/多引擎/悬浮球一律后置。

@@ -9,7 +9,6 @@
 | 多引擎 | sensebook-ue7 | |
 | 悬浮球 | sensebook-sf2 | |
 | 油猴清亮化 / 多服务商 | sensebook-0cy | |
-| 音标小改 | sensebook-aw2 | |
 | Mac 可配置热键 UI | sensebook-djd.1 | |
 | Mac 与油猴设置/生词本对齐 | sensebook-djd.3 | |
 
