@@ -24,8 +24,8 @@
 
 ## 明确后置
 
-- 邮箱 OTP / magic link（Beads `sensebook-44n`；若改登录方式再开）
-- Google 等 OAuth
+- 邮箱 OTP / magic link（Beads `sensebook-44n`）— 详见 [auth-otp-deferred.md](auth-otp-deferred.md)：首选现有 Worker+JWT + Resend 发信；不立刻改登录栈
+- Google 等 OAuth（现阶段不推荐作主登录）
 - Mac 接同步登录
 - OCR（`sensebook-13d`）、多引擎（`sensebook-ue7`）、悬浮球（`sensebook-sf2`）
 - 油猴 UI 清亮化/多服务商（`sensebook-0cy`）、音标小改（`sensebook-aw2`）
