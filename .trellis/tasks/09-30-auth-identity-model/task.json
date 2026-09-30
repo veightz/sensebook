@@ -1,0 +1,15 @@
+{
+  "id": "auth-identity-model",
+  "name": "auth-identity-model",
+  "title": "统一账号体系设计（邮箱/Google/Telegram）",
+  "description": "一个 Sensebook 用户 + 多登录方式；含绑定与合并规则。设计盖章后再实现 OAuth。",
+  "status": "planning",
+  "priority": "P1",
+  "creator": "veightz",
+  "assignee": "veightz",
+  "createdAt": "2026-09-30",
+  "completedAt": null,
+  "base_branch": "main",
+  "notes": "不跟音标/静默抢主线；OTP 后置",
+  "meta": {}
+}

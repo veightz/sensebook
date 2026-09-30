@@ -23,10 +23,16 @@
 
 词条与 DeepSeek Key 本机优先。可选邮箱+密码 + JWT 跨端同步（油猴/安卓）已上线；**不要求**用户登录才能用。
 
+## 账号（设计中 · 未开工代码）
+
+统一身份模型见 [auth-identity-model.md](auth-identity-model.md)：**一个 User**，邮箱注册/登录、Google、Telegram 均为可绑定 Identity；禁止默认拆号。设计 §8 盖章前 **不写 OAuth 代码**。
+
+油猴小改（音标、选中自动查询「静默 5 分钟」）不跟账号抢主线。
+
 ## 明确后置
 
 - 邮箱 OTP / magic link（Beads `sensebook-44n`）— 详见 [auth-otp-deferred.md](auth-otp-deferred.md)：首选现有 Worker+JWT + Resend 发信；不立刻改登录栈
-- Google 等 OAuth（现阶段不推荐作主登录）
+- Google / Telegram OAuth **实现**（等账号设计盖章）
 - Mac 接同步登录
 - OCR（`sensebook-13d`）、多引擎（`sensebook-ue7`）、悬浮球（`sensebook-sf2`）
 - 油猴 UI 清亮化/多服务商（`sensebook-0cy`）
