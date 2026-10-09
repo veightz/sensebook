@@ -25,9 +25,9 @@
 
 ## 账号（设计中 · 未开工代码）
 
-统一身份模型见 [auth-identity-model.md](auth-identity-model.md)：**一个 User**，邮箱注册/登录、Google、Telegram 均为可绑定 Identity；禁止默认拆号。设计 §8 盖章前 **不写 OAuth 代码**。
+统一身份模型见 [auth-identity-model.md](auth-identity-model.md)：**一个 User**，邮箱注册/登录、Google、Telegram 均为可绑定 Identity；禁止默认拆号。§8 已盖章（2026-10-09）：v1 先上 Google + 邮箱，Telegram 单独后续发版；实现任务另开。
 
-油猴小改（音标、选中自动查询「静默 5 分钟」）不跟账号抢主线。
+油猴小改（音标、快捷静默（默认 15 秒，可配置））不跟账号抢主线。
 
 ## 明确后置
 
