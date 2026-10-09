@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202609251331
+// @version      0.1.202610092327
 // @description  划词自动查询 / 翻译 / 加入生词本 / 存本并释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -249,6 +249,14 @@
   const QUERY_CACHE_KEY = 'sensebook_query_cache';
   const QUERY_CACHE_CAP = 250;
   const AUTO_QUERY_DEBOUNCE_MS = 350;
+  // Quick mute (静默): one tap silences popup / floating layer / auto-query for N seconds.
+  // Replaces the earlier planned fixed「静默 5 分钟」— 5 分钟 is now one preset.
+  const MUTE_SECONDS_KEY = 'sensebook_mute_seconds';
+  const MUTE_UNTIL_KEY = 'sensebook_mute_until';
+  const MUTE_DEFAULT_SECONDS = 15;
+  const MUTE_PRESET_SECONDS = [15, 30, 300];
+  const MUTE_MIN_SECONDS = 1;
+  const MUTE_MAX_SECONDS = 24 * 60 * 60;
 
   // Local EN→ZH dict (async file from repo). Keys are INDEPENDENT of userscript @version
   // so bumping the script never clears the dict GM cache.
@@ -377,6 +385,80 @@
 
   function setAutoQueryEnabled(on) {
     storeSet(AUTO_QUERY_KEY, !!on);
+  }
+
+  // ---- quick mute (静默) ----
+  function clampMuteSeconds(n) {
+    const v = Math.round(Number(n));
+    if (!Number.isFinite(v)) return MUTE_DEFAULT_SECONDS;
+    return Math.min(MUTE_MAX_SECONDS, Math.max(MUTE_MIN_SECONDS, v));
+  }
+
+  function getMuteSeconds() {
+    const raw = storeGet(MUTE_SECONDS_KEY, MUTE_DEFAULT_SECONDS);
+    if (raw == null || raw === '') return MUTE_DEFAULT_SECONDS;
+    return clampMuteSeconds(raw);
+  }
+
+  function setMuteSeconds(n) {
+    storeSet(MUTE_SECONDS_KEY, clampMuteSeconds(n));
+  }
+
+  function formatMuteDuration(sec) {
+    sec = Math.max(0, Math.round(sec));
+    if (sec < 60) return sec + ' 秒';
+    if (sec % 60 === 0) return (sec / 60) + ' 分钟';
+    return Math.floor(sec / 60) + ' 分 ' + (sec % 60) + ' 秒';
+  }
+
+  /** Compact countdown for the pill: 12s / 4:59. */
+  function formatMuteLeft(ms) {
+    const sec = Math.max(0, Math.ceil(ms / 1000));
+    if (sec < 60) return sec + 's';
+    const m = Math.floor(sec / 60);
+    const ss = String(sec % 60).padStart(2, '0');
+    return m + ':' + ss;
+  }
+
+  function muteRemainingMs() {
+    const until = Number(storeGet(MUTE_UNTIL_KEY, 0)) || 0;
+    const left = until - Date.now();
+    // Guard against a corrupted / far-future value
+    if (left > MUTE_MAX_SECONDS * 1000 + 5000) return 0;
+    return left > 0 ? left : 0;
+  }
+
+  function isMuted() {
+    try { return muteRemainingMs() > 0; } catch { return false; }
+  }
+
+  function startMute(seconds) {
+    const sec = clampMuteSeconds(seconds == null ? getMuteSeconds() : seconds);
+    storeSet(MUTE_UNTIL_KEY, Date.now() + sec * 1000);
+    try {
+      if (selectionCheckTimer) {
+        clearTimeout(selectionCheckTimer);
+        selectionCheckTimer = null;
+      }
+    } catch { /* ignore */ }
+    try { hidePopup(); } catch { /* ignore */ }
+    selectionGen += 1; // drop in-flight auto results
+    try { hideFabSheet(); } catch { /* ignore */ }
+    try {
+      const t = document.getElementById('sensebook-toast');
+      if (t) setStyleProp(t, 'display', 'none');
+    } catch { /* ignore */ }
+    updateMuteUi();
+  }
+
+  function cancelMute() {
+    storeSet(MUTE_UNTIL_KEY, 0);
+    updateMuteUi();
+  }
+
+  function toggleMute() {
+    if (isMuted()) cancelMute();
+    else startMute();
   }
 
   /** Auto-query mode: 'translate' | 'sense'. Default 语境释义 (sense). */
@@ -886,6 +968,9 @@
   let fabSheet = null;
   let fabHoverBridge = null;
   let fabButton = null;
+  let fabMutePill = null; // one-tap 静默 button beside the FAB
+  let fabMuteAction = null; // 静默 item inside the FAB sheet
+  let muteTicker = null;
   let fabDragging = false;
   let fabDragSuppressUntil = 0;
   let fabHoverCloseTimer = null;
@@ -905,7 +990,8 @@
     return hosts.some((h) => e.target === h);
   }
 
-  function toast(msg) {
+  function toast(msg, force) {
+    if (!force && isMuted()) return; // 静默中：不弹任何 Sensebook 提示
     let el = document.getElementById('sensebook-toast');
     if (!el) {
       el = document.createElement('div');
@@ -2047,6 +2133,24 @@
     <div class="hint" style="margin-top:4px;">默认开启：自动查询成功后写入生词本；关闭后只展示、不自动入库。</div>
   </div>
 
+  <div class="mode-box" id="muteWrap">
+    <div style="font-weight:600;font-size:13px;margin-bottom:8px;">快捷静默时长</div>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:500;margin:0 0 6px;">
+      <input type="radio" name="muteSec" value="15" style="width:16px;height:16px;" /> 15 秒
+    </label>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:500;margin:0 0 6px;">
+      <input type="radio" name="muteSec" value="30" style="width:16px;height:16px;" /> 30 秒
+    </label>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:500;margin:0 0 6px;">
+      <input type="radio" name="muteSec" value="300" style="width:16px;height:16px;" /> 5 分钟
+    </label>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:500;margin:0 0 6px;">
+      <input type="radio" name="muteSec" value="custom" id="muteSecCustomRadio" style="width:16px;height:16px;" /> 自定义
+      <input class="text-input" id="muteSecCustom" type="number" inputmode="numeric" min="1" max="86400" step="1" placeholder="秒" style="width:96px;min-height:34px;padding:4px 8px;" /> 秒
+    </label>
+    <div class="hint" style="margin-top:4px;">点悬浮按钮旁的「静」（或菜单里的「静默」）：这段时间内不弹划词浮层、不自动查询，按钮上显示倒计时；再点一次提前取消。</div>
+  </div>
+
   <div class="mode-box">
     <div style="font-weight:700;font-size:14px;">跨端同步</div>
     <div class="hint">浏览器与 Android 使用同一账号。首次同步会上传已有本地词条。</div>
@@ -2088,6 +2192,22 @@
     if (modeSenseInput) modeSenseInput.checked = curMode === AUTO_QUERY_MODE_SENSE;
     if (modeTranslateInput) modeTranslateInput.checked = curMode === AUTO_QUERY_MODE_TRANSLATE;
     if (autoSaveVocabInput) autoSaveVocabInput.checked = isAutoSaveVocabEnabled();
+    const muteSecNow = getMuteSeconds();
+    const muteRadios = Array.from(shadow.querySelectorAll('input[name="muteSec"]'));
+    const muteCustomInput = $('muteSecCustom');
+    const muteCustomRadio = $('muteSecCustomRadio');
+    if (MUTE_PRESET_SECONDS.includes(muteSecNow)) {
+      const hit = muteRadios.find((el) => el.value === String(muteSecNow));
+      if (hit) hit.checked = true;
+    } else {
+      if (muteCustomRadio) muteCustomRadio.checked = true;
+      if (muteCustomInput) muteCustomInput.value = String(muteSecNow);
+    }
+    if (muteCustomInput) {
+      const pickCustom = () => { if (muteCustomRadio) muteCustomRadio.checked = true; };
+      muteCustomInput.addEventListener('focus', pickCustom);
+      muteCustomInput.addEventListener('input', pickCustom);
+    }
     $('syncUrl').value = getApiUrl();
     $('syncEmail').value = storeGet('sensebook_sync_email', '') || '';
 
@@ -2106,7 +2226,22 @@
       if (modeTranslateInput && modeTranslateInput.checked) setAutoQueryMode(AUTO_QUERY_MODE_TRANSLATE);
       else setAutoQueryMode(AUTO_QUERY_MODE_SENSE);
       if (autoSaveVocabInput) setAutoSaveVocabEnabled(!!autoSaveVocabInput.checked);
-      statusEl.textContent = '已保存（本机）。';
+      const pickedMute = muteRadios.find((el) => el.checked);
+      if (pickedMute) {
+        let sec;
+        if (pickedMute.value === 'custom') {
+          sec = Number(muteCustomInput && muteCustomInput.value);
+          if (!Number.isFinite(sec) || sec < MUTE_MIN_SECONDS || sec > MUTE_MAX_SECONDS) {
+            statusEl.textContent = '自定义静默时长需为 1–86400 秒的整数。';
+            return;
+          }
+        } else {
+          sec = Number(pickedMute.value);
+        }
+        setMuteSeconds(sec);
+        updateMuteUi();
+      }
+      statusEl.textContent = '已保存（本机）。静默时长：' + formatMuteDuration(getMuteSeconds()) + '。';
       toast('Sensebook 设置已保存');
     };
 
@@ -3204,6 +3339,7 @@
       autoQueryTimer = null;
     }
     if (!isAutoQueryEnabled()) return;
+    if (isMuted()) return;
     const word = lastSel.text;
     const sentence = lastSel.sentence || lastSel.text;
     if (!word) return;
@@ -3217,7 +3353,7 @@
 
       autoQueryTimer = setTimeout(async () => {
         autoQueryTimer = null;
-        if (reqId !== selectionGen) return;
+        if (reqId !== selectionGen || isMuted()) return;
 
         if (cacheHit && (cacheHit.ai_word_sense || cacheHit.ai_sentence_gloss)) {
           setSenseGlossResult({
@@ -3293,7 +3429,7 @@
 
     autoQueryTimer = setTimeout(async () => {
       autoQueryTimer = null;
-      if (reqId !== selectionGen) return;
+      if (reqId !== selectionGen || isMuted()) return;
 
       let localHit = null;
       try {
@@ -3484,6 +3620,10 @@
   /** Keep popup near live selection (clamp/flip), or hide if selection is gone. */
   function followSelectionOrHide() {
     if (!popup) return;
+    if (isMuted()) {
+      hidePopup();
+      return;
+    }
     try {
       const sel = window.getSelection && window.getSelection();
       if (!sel || sel.isCollapsed || !sel.rangeCount) {
@@ -3510,6 +3650,11 @@
   }
 
   function onSelectionChange() {
+    // 静默中：不显示浮层、不自动查询（各 frame 共享同一 mute_until）。
+    if (isMuted()) {
+      if (popup) hidePopup();
+      return;
+    }
     // Do not gate on busy — auto-query / parallel lookups must allow new selection
     // (stale responses discarded via selectionGen).
     const sel = window.getSelection();
@@ -3883,6 +4028,7 @@
       bottom: 'auto',
     });
     if (isFabSheetOpen()) positionFabSheet();
+    positionMutePill();
     return pos;
   }
 
@@ -3897,6 +4043,7 @@
       bottom: pos.bottom + 'px',
     });
     if (isFabSheetOpen()) positionFabSheet();
+    positionMutePill();
     return pos;
   }
 
@@ -4034,6 +4181,9 @@
       fabSheet = document.getElementById('sensebook-fab-sheet') || fabSheet;
       fabHoverBridge = document.getElementById('sensebook-fab-hover-bridge') || fabHoverBridge;
       fabButton = document.getElementById('sensebook-fab-button') || fabButton;
+      fabMutePill = document.getElementById('sensebook-fab-mute') || fabMutePill;
+      fabMuteAction = document.getElementById('sensebook-fab-mute-action') || fabMuteAction;
+      updateMuteUi();
       return;
     }
     fabRoot = document.createElement('div');
@@ -4115,6 +4265,9 @@
       return button;
     };
 
+    fabMuteAction = makeAction('静默', toggleMute);
+    fabMuteAction.id = 'sensebook-fab-mute-action';
+    fabSheet.appendChild(fabMuteAction);
     fabSheet.appendChild(makeAction('DeepSeek 设置', showLlmSettingsPanel));
     fabSheet.appendChild(makeAction('Sensebook 设置', showAppSettingsPanel));
     fabSheet.appendChild(makeAction('我的生词本', showLocalPanel));
@@ -4183,8 +4336,48 @@
     });
     updateFabState();
 
+    // One-tap 静默 pill: sits beside the FAB (absolute, never part of FAB drag/measure).
+    fabMutePill = document.createElement('button');
+    fabMutePill.type = 'button';
+    fabMutePill.id = 'sensebook-fab-mute';
+    applyStyles(fabMutePill, {
+      position: 'absolute',
+      top: '50%',
+      transform: 'translateY(-50%)',
+      right: 'calc(100% + 6px)',
+      left: 'auto',
+      zIndex: '2',
+      minWidth: '30px',
+      minHeight: '30px',
+      padding: '3px 8px',
+      border: '2px solid #fff',
+      borderRadius: '999px',
+      background: '#475569',
+      color: '#fff',
+      boxShadow: '0 2px 8px rgba(0,0,0,.25)',
+      fontSize: '11px',
+      fontWeight: '700',
+      lineHeight: '1.15',
+      whiteSpace: 'nowrap',
+      cursor: 'pointer',
+      touchAction: 'manipulation',
+      userSelect: 'none',
+      fontVariantNumeric: 'tabular-nums',
+    });
+    // Never start a FAB drag / hover-open from the pill.
+    fabMutePill.addEventListener('pointerdown', (event) => { event.stopPropagation(); });
+    fabMutePill.addEventListener('pointerenter', (event) => { event.stopPropagation(); });
+    fabMutePill.addEventListener('mousedown', (event) => { event.preventDefault(); });
+    fabMutePill.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (fabDragging || Date.now() < fabDragSuppressUntil) return;
+      toggleMute();
+    });
+
     // FAB first in tree & higher z-index; sheet/bridge are absolute so they never push/cover the drag handle
     fabRoot.appendChild(fabButton);
+    fabRoot.appendChild(fabMutePill);
     fabRoot.appendChild(fabHoverBridge);
     fabRoot.appendChild(fabSheet);
     const mount = document.body || document.documentElement;
@@ -4192,6 +4385,7 @@
 
     loadAndApplyFabPosition();
     setupFabDrag();
+    updateMuteUi();
 
     // Re-clamp after layout / viewport changes; keep persisted coords valid.
     try {
@@ -4206,6 +4400,54 @@
         });
       }
     } catch { /* ignore */ }
+  }
+
+  /** Put the 静默 pill on whichever side of the FAB has room. */
+  function positionMutePill() {
+    if (!fabMutePill || !fabRoot) return;
+    let rect;
+    try { rect = fabRoot.getBoundingClientRect(); } catch { return; }
+    if (!rect) return;
+    const pillW = fabMutePill.offsetWidth || 40;
+    const roomLeft = rect.left;
+    const roomRight = window.innerWidth - rect.right;
+    if (roomLeft >= pillW + 10 || roomLeft >= roomRight) {
+      setStyleProp(fabMutePill, 'left', 'auto');
+      setStyleProp(fabMutePill, 'right', 'calc(100% + 6px)');
+    } else {
+      setStyleProp(fabMutePill, 'right', 'auto');
+      setStyleProp(fabMutePill, 'left', 'calc(100% + 6px)');
+    }
+  }
+
+  /** Refresh pill / sheet item text; runs a 1s ticker only while muted. */
+  function updateMuteUi() {
+    const left = muteRemainingMs();
+    const muted = left > 0;
+    const dur = formatMuteDuration(getMuteSeconds());
+    if (fabMutePill) {
+      fabMutePill.textContent = muted ? '静 ' + formatMuteLeft(left) : '静';
+      setStyleProp(fabMutePill, 'background', muted ? '#d97706' : '#475569');
+      const label = muted
+        ? 'Sensebook 静默中，剩余 ' + formatMuteLeft(left) + '，点按提前取消'
+        : '静默 Sensebook ' + dur + '（不弹浮层、不自动查询）';
+      fabMutePill.title = label;
+      fabMutePill.setAttribute('aria-label', label);
+      fabMutePill.setAttribute('aria-pressed', muted ? 'true' : 'false');
+      positionMutePill();
+    }
+    if (fabMuteAction) {
+      fabMuteAction.textContent = muted
+        ? '取消静默（' + formatMuteLeft(left) + '）'
+        : '静默 ' + dur;
+    }
+    if (fabButton) setStyleProp(fabButton, 'opacity', muted ? '0.6' : '1');
+    if (muted && !muteTicker && isTopWindow()) {
+      muteTicker = setInterval(updateMuteUi, 1000);
+    } else if (!muted && muteTicker) {
+      clearInterval(muteTicker);
+      muteTicker = null;
+    }
   }
 
   function updateFabState() {
@@ -4240,7 +4482,7 @@
       onboardingScheduled = true;
       setTimeout(() => {
         try {
-          if (hasLlmConfig() || storeGet(ONBOARDING_DONE_KEY, false)) return;
+          if (hasLlmConfig() || storeGet(ONBOARDING_DONE_KEY, false) || isMuted()) return;
           showLlmSettingsPanel();
           toast('请配置 DeepSeek API Key');
         } catch (err) {
@@ -4260,6 +4502,9 @@
       });
       gmMenu('Sensebook：DeepSeek 设置', () => {
         showLlmSettingsPanel();
+      });
+      gmMenu('Sensebook：静默 / 取消静默', () => {
+        toggleMute();
       });
       gmMenu('Sensebook：Sensebook 设置', () => {
         showAppSettingsPanel();
@@ -4314,7 +4559,10 @@
   function startFabWatchdog() {
     if (!isTopWindow()) return;
     try {
-      setInterval(ensureFabAttached, 2000);
+      setInterval(() => {
+        ensureFabAttached();
+        try { if (!muteTicker && isMuted()) updateMuteUi(); } catch { /* ignore */ }
+      }, 2000);
     } catch { /* ignore */ }
     try {
       const obs = new MutationObserver(() => {
