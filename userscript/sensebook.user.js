@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202610092327
+// @version      0.1.202610101817
 // @description  划词自动查询 / 翻译 / 加入生词本 / 存本并释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -257,6 +257,10 @@
   const MUTE_PRESET_SECONDS = [15, 30, 300];
   const MUTE_MIN_SECONDS = 1;
   const MUTE_MAX_SECONDS = 24 * 60 * 60;
+  // Session mute until refresh: not a timer. Cleared on top-window document load /
+  // cancel. sessionStorage (same-origin) + GM flag (all frames); never persist across reload.
+  const MUTE_SESSION_KEY = 'sensebook_mute_session';
+  const MUTE_SESSION_FLAG_SS = 'sensebook_mute_until_refresh';
 
   // Local EN→ZH dict (async file from repo). Keys are INDEPENDENT of userscript @version
   // so bumping the script never clears the dict GM cache.
@@ -420,6 +424,15 @@
     return m + ':' + ss;
   }
 
+  /**
+   * sessionStorage survives reload; clear until-refresh flags on every top
+   * document load so a refresh ends session mute (GM alone would persist).
+   */
+  if (isTopWindow()) {
+    try { sessionStorage.removeItem(MUTE_SESSION_FLAG_SS); } catch { /* ignore */ }
+    try { storeSet(MUTE_SESSION_KEY, ''); } catch { /* ignore */ }
+  }
+
   function muteRemainingMs() {
     const until = Number(storeGet(MUTE_UNTIL_KEY, 0)) || 0;
     const left = until - Date.now();
@@ -428,13 +441,28 @@
     return left > 0 ? left : 0;
   }
 
-  function isMuted() {
-    try { return muteRemainingMs() > 0; } catch { return false; }
+  function isSessionMuted() {
+    try {
+      if (sessionStorage.getItem(MUTE_SESSION_FLAG_SS) === '1') return true;
+    } catch { /* ignore */ }
+    try {
+      const v = storeGet(MUTE_SESSION_KEY, '');
+      return v === '1' || v === 1 || v === true;
+    } catch {
+      return false;
+    }
   }
 
-  function startMute(seconds) {
-    const sec = clampMuteSeconds(seconds == null ? getMuteSeconds() : seconds);
-    storeSet(MUTE_UNTIL_KEY, Date.now() + sec * 1000);
+  function isMuted() {
+    try {
+      return isSessionMuted() || muteRemainingMs() > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Shared side effects when entering any mute mode. */
+  function applyMuteSilence() {
     try {
       if (selectionCheckTimer) {
         clearTimeout(selectionCheckTimer);
@@ -448,17 +476,46 @@
       const t = document.getElementById('sensebook-toast');
       if (t) setStyleProp(t, 'display', 'none');
     } catch { /* ignore */ }
+  }
+
+  function clearSessionMuteFlags() {
+    try { sessionStorage.removeItem(MUTE_SESSION_FLAG_SS); } catch { /* ignore */ }
+    try { storeSet(MUTE_SESSION_KEY, ''); } catch { /* ignore */ }
+  }
+
+  function startMute(seconds) {
+    clearSessionMuteFlags();
+    const sec = clampMuteSeconds(seconds == null ? getMuteSeconds() : seconds);
+    storeSet(MUTE_UNTIL_KEY, Date.now() + sec * 1000);
+    applyMuteSilence();
+    updateMuteUi();
+  }
+
+  /** Mute until the next full page refresh (no countdown). */
+  function startSessionMute() {
+    storeSet(MUTE_UNTIL_KEY, 0);
+    try { sessionStorage.setItem(MUTE_SESSION_FLAG_SS, '1'); } catch { /* ignore */ }
+    try { storeSet(MUTE_SESSION_KEY, '1'); } catch { /* ignore */ }
+    applyMuteSilence();
     updateMuteUi();
   }
 
   function cancelMute() {
     storeSet(MUTE_UNTIL_KEY, 0);
+    clearSessionMuteFlags();
     updateMuteUi();
   }
 
+  /** Short-tap 「静」 / timed menu: cancel any mute, else start timed mute. */
   function toggleMute() {
     if (isMuted()) cancelMute();
     else startMute();
+  }
+
+  /** FAB 「静到刷新」: cancel if session-muted, else enter session mute. */
+  function toggleSessionMute() {
+    if (isSessionMuted()) cancelMute();
+    else startSessionMute();
   }
 
   /** Auto-query mode: 'translate' | 'sense'. Default 语境释义 (sense). */
@@ -969,7 +1026,8 @@
   let fabHoverBridge = null;
   let fabButton = null;
   let fabMutePill = null; // one-tap 静默 button beside the FAB
-  let fabMuteAction = null; // 静默 item inside the FAB sheet
+  let fabMuteAction = null; // timed 静默 item inside the FAB sheet
+  let fabMuteSessionAction = null; // 「静到刷新」 item inside the FAB sheet
   let muteTicker = null;
   let fabDragging = false;
   let fabDragSuppressUntil = 0;
@@ -2148,7 +2206,7 @@
       <input type="radio" name="muteSec" value="custom" id="muteSecCustomRadio" style="width:16px;height:16px;" /> 自定义
       <input class="text-input" id="muteSecCustom" type="number" inputmode="numeric" min="1" max="86400" step="1" placeholder="秒" style="width:96px;min-height:34px;padding:4px 8px;" /> 秒
     </label>
-    <div class="hint" style="margin-top:4px;">点悬浮按钮旁的「静」（或菜单里的「静默」）：这段时间内不弹划词浮层、不自动查询，按钮上显示倒计时；再点一次提前取消。</div>
+    <div class="hint" style="margin-top:4px;">点悬浮按钮旁的「静」（或菜单「静默」）：按上方时长静默，按钮显示倒计时；再点提前取消。需要一直静到刷新页面时，用 FAB 菜单「静到刷新」（无倒计时，刷新后自动恢复）。</div>
   </div>
 
   <div class="mode-box">
@@ -4183,6 +4241,8 @@
       fabButton = document.getElementById('sensebook-fab-button') || fabButton;
       fabMutePill = document.getElementById('sensebook-fab-mute') || fabMutePill;
       fabMuteAction = document.getElementById('sensebook-fab-mute-action') || fabMuteAction;
+      fabMuteSessionAction =
+        document.getElementById('sensebook-fab-mute-session-action') || fabMuteSessionAction;
       updateMuteUi();
       return;
     }
@@ -4268,6 +4328,9 @@
     fabMuteAction = makeAction('静默', toggleMute);
     fabMuteAction.id = 'sensebook-fab-mute-action';
     fabSheet.appendChild(fabMuteAction);
+    fabMuteSessionAction = makeAction('静到刷新', toggleSessionMute);
+    fabMuteSessionAction.id = 'sensebook-fab-mute-session-action';
+    fabSheet.appendChild(fabMuteSessionAction);
     fabSheet.appendChild(makeAction('DeepSeek 设置', showLlmSettingsPanel));
     fabSheet.appendChild(makeAction('Sensebook 设置', showAppSettingsPanel));
     fabSheet.appendChild(makeAction('我的生词本', showLocalPanel));
@@ -4420,31 +4483,44 @@
     }
   }
 
-  /** Refresh pill / sheet item text; runs a 1s ticker only while muted. */
+  /** Refresh pill / sheet item text; runs a 1s ticker only while timed-muted. */
   function updateMuteUi() {
-    const left = muteRemainingMs();
-    const muted = left > 0;
+    const session = isSessionMuted();
+    const left = session ? 0 : muteRemainingMs();
+    const timed = !session && left > 0;
+    const muted = session || timed;
     const dur = formatMuteDuration(getMuteSeconds());
     if (fabMutePill) {
-      fabMutePill.textContent = muted ? '静 ' + formatMuteLeft(left) : '静';
+      if (session) fabMutePill.textContent = '静 · 直到刷新';
+      else if (timed) fabMutePill.textContent = '静 ' + formatMuteLeft(left);
+      else fabMutePill.textContent = '静';
       setStyleProp(fabMutePill, 'background', muted ? '#d97706' : '#475569');
-      const label = muted
-        ? 'Sensebook 静默中，剩余 ' + formatMuteLeft(left) + '，点按提前取消'
-        : '静默 Sensebook ' + dur + '（不弹浮层、不自动查询）';
+      let label;
+      if (session) {
+        label = 'Sensebook 已静默到刷新，点按提前取消';
+      } else if (timed) {
+        label = 'Sensebook 静默中，剩余 ' + formatMuteLeft(left) + '，点按提前取消';
+      } else {
+        label = '静默 Sensebook ' + dur + '（不弹浮层、不自动查询）';
+      }
       fabMutePill.title = label;
       fabMutePill.setAttribute('aria-label', label);
       fabMutePill.setAttribute('aria-pressed', muted ? 'true' : 'false');
       positionMutePill();
     }
     if (fabMuteAction) {
-      fabMuteAction.textContent = muted
-        ? '取消静默（' + formatMuteLeft(left) + '）'
-        : '静默 ' + dur;
+      if (session) fabMuteAction.textContent = '取消静默';
+      else if (timed) fabMuteAction.textContent = '取消静默（' + formatMuteLeft(left) + '）';
+      else fabMuteAction.textContent = '静默 ' + dur;
+    }
+    if (fabMuteSessionAction) {
+      fabMuteSessionAction.textContent = session ? '取消静到刷新' : '静到刷新';
     }
     if (fabButton) setStyleProp(fabButton, 'opacity', muted ? '0.6' : '1');
-    if (muted && !muteTicker && isTopWindow()) {
+    // Ticker only needed for timed countdown; session mute has no clock.
+    if (timed && !muteTicker && isTopWindow()) {
       muteTicker = setInterval(updateMuteUi, 1000);
-    } else if (!muted && muteTicker) {
+    } else if (!timed && muteTicker) {
       clearInterval(muteTicker);
       muteTicker = null;
     }
@@ -4505,6 +4581,9 @@
       });
       gmMenu('Sensebook：静默 / 取消静默', () => {
         toggleMute();
+      });
+      gmMenu('Sensebook：静到刷新 / 取消', () => {
+        toggleSessionMute();
       });
       gmMenu('Sensebook：Sensebook 设置', () => {
         showAppSettingsPanel();
