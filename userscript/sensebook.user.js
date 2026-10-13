@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202610140324
+// @version      0.1.202610140345
 // @description  划词自动查询 / 翻译 / 加入生词本 / 存本并释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -14,6 +14,7 @@
 // @connect      127.0.0.1
 // @connect      localhost
 // @connect      api.dictionaryapi.dev
+// @connect      dict.youdao.com
 // @connect      *
 // @run-at       document-idle
 // @inject-into  content
@@ -363,6 +364,11 @@
   const FREE_DICT_CACHE_KEY = 'sensebook_freedict_cache';
   const FREE_DICT_CACHE_CAP = 300;
   const FREE_DICT_URL = 'https://api.dictionaryapi.dev/api/v2/entries/en/';
+  const YOUDAO_DICT_URL = 'https://dict.youdao.com/jsonapi?q=';
+  const DICT_SOURCE_KEY = 'sensebook_dict_source'; // auto | youdao | dictapi | off
+  const DICT_TIMEOUT_MS = 2500;
+  const DICT_FAIL_TTL_MS = 10 * 60 * 1000;
+  const DICT_FAIL_SESSION_MAX = 3;
 
   // ---- storage helpers (safe gmGet/gmSet + localStorage fallback) ----
   function coerceStoreValue(v) {
@@ -727,41 +733,126 @@
     return hit && !hit.miss ? hit : null;
   }
 
-  /** Resolves to { phonetic, defs } or null. Never throws. */
+  function getDictSource() {
+    const v = storeGet(DICT_SOURCE_KEY, 'auto');
+    return ['auto', 'youdao', 'dictapi', 'off'].includes(v) ? v : 'auto';
+  }
+  function setDictSource(v) {
+    storeSet(DICT_SOURCE_KEY, ['auto', 'youdao', 'dictapi', 'off'].includes(v) ? v : 'auto');
+  }
+
+  // Per-source health: negative-cache network failures (10 min); N consecutive fails => skip for session.
+  const dictHealth = { dictapi: { until: 0, fails: 0 }, youdao: { until: 0, fails: 0 } };
+  function _dictSourceUsable(src) {
+    const h = dictHealth[src];
+    return !!h && h.fails < DICT_FAIL_SESSION_MAX && Date.now() >= h.until;
+  }
+  function _dictMarkFail(src) {
+    const h = dictHealth[src]; if (!h) return;
+    h.fails++; h.until = Date.now() + DICT_FAIL_TTL_MS;
+  }
+  function _dictMarkOk(src) {
+    const h = dictHealth[src]; if (!h) return;
+    h.fails = 0; h.until = 0;
+  }
+
+  function parseYoudaoPayload(data) {
+    try {
+      const w = data && data.ec && Array.isArray(data.ec.word) && data.ec.word[0];
+      if (!w) return null;
+      const uk = String(w.ukphone || '').trim();
+      const us = String(w.usphone || '').trim();
+      let phonetic = '';
+      if (uk && us && uk !== us) phonetic = '英 /' + uk + '/  美 /' + us + '/';
+      else if (uk || us) phonetic = '/' + (uk || us) + '/';
+      const defs = [];
+      for (const t of (Array.isArray(w.trs) ? w.trs : [])) {
+        if (defs.length >= 2) break;
+        const i = t && t.tr && t.tr[0] && t.tr[0].l && t.tr[0].l.i;
+        let line = Array.isArray(i) ? String(i[0] || '') : String(i || '');
+        line = line.trim();
+        if (!line) continue;
+        const m = line.match(/^([a-z]+\.(?:\s*&\s*[a-z]+\.)?)\s*(.*)$/i);
+        let pos = m ? m[1] : '';
+        let def = m ? m[2] : line;
+        // keep first few senses only
+        def = def.split('；').slice(0, 3).join('；');
+        if (def.length > 60) def = def.slice(0, 57) + '…';
+        defs.push({ pos, def });
+      }
+      if (!phonetic && !defs.length) return null;
+      return { phonetic, defs };
+    } catch { return null; }
+  }
+
+  /** One source request. Resolves { ok:true, data } | { ok:true, data:null, miss:true } | { ok:false }. Never throws. */
+  function _dictFetch(src, w) {
+    return new Promise((resolve) => {
+      let done = false, req;
+      const finish = (v) => {
+        if (done) return; done = true;
+        clearTimeout(timer);
+        if (!v.ok) { _dictMarkFail(src); try { req && req.abort && req.abort(); } catch { /* ignore */ } }
+        else _dictMarkOk(src);
+        resolve(v);
+      };
+      const timer = setTimeout(() => finish({ ok: false }), DICT_TIMEOUT_MS + 100);
+      const url = src === 'youdao' ? YOUDAO_DICT_URL + encodeURIComponent(w) : FREE_DICT_URL + encodeURIComponent(w);
+      try {
+        req = gmXhr({
+          method: 'GET', url, timeout: DICT_TIMEOUT_MS, anonymous: true,
+          onload: (res) => {
+            try {
+              if (src === 'dictapi' && res.status === 404) return finish({ ok: true, data: null, miss: true });
+              if (res.status < 200 || res.status >= 300) return finish({ ok: false });
+              const json = JSON.parse(res.responseText || 'null');
+              const parsed = src === 'youdao' ? parseYoudaoPayload(json) : parseFreeDictPayload(json);
+              finish(parsed ? { ok: true, data: parsed } : { ok: true, data: null, miss: true });
+            } catch { finish({ ok: false }); }
+          },
+          onerror: () => finish({ ok: false }),
+          ontimeout: () => finish({ ok: false }),
+          onabort: () => finish({ ok: false }),
+        });
+      } catch { finish({ ok: false }); }
+    });
+  }
+
+  /** Resolves to { phonetic, defs } or null. Never throws, never rejects; max ~2.6s. */
   function lookupFreeDict(word) {
     _loadFreeDictStore();
     const w = String(word || '').trim().toLowerCase();
     if (!isShortWordToken(w)) return Promise.resolve(null);
+    const mode = getDictSource();
+    if (mode === 'off') return Promise.resolve(null);
     if (freeDictMem.has(w)) {
       const hit = freeDictMem.get(w);
       return Promise.resolve(hit && !hit.miss ? hit : null);
     }
     if (freeDictInFlight.has(w)) return freeDictInFlight.get(w);
+    let srcs = mode === 'auto' ? ['youdao', 'dictapi'] : [mode];
+    srcs = srcs.filter(_dictSourceUsable);
+    if (!srcs.length) return Promise.resolve(null);
     const pr = new Promise((resolve) => {
-      let done = false;
-      const finish = (v) => { if (!done) { done = true; resolve(v); } };
-      setTimeout(() => finish(null), 6000);
-      try {
-        gmXhr({
-          method: 'GET',
-          url: FREE_DICT_URL + encodeURIComponent(w),
-          timeout: 6000,
-          onload: (res) => {
-            try {
-              if (res.status === 404) { freeDictMem.set(w, { miss: true }); return finish(null); }
-              if (res.status < 200 || res.status >= 300) return finish(null);
-              const parsed = parseFreeDictPayload(JSON.parse(res.responseText || 'null'));
-              if (!parsed) { freeDictMem.set(w, { miss: true }); return finish(null); }
-              freeDictMem.set(w, parsed);
-              _persistFreeDict();
-              backfillEntryPhonetic(w, parsed.phonetic);
-              finish(parsed);
-            } catch { finish(null); }
-          },
-          onerror: () => finish(null),
-          ontimeout: () => finish(null),
-        });
-      } catch { finish(null); }
+      let pending = srcs.length, misses = 0, done = false;
+      for (const src of srcs) {
+        _dictFetch(src, w).then((r) => {
+          if (done) return;
+          if (r.ok && r.data) {
+            done = true;
+            freeDictMem.set(w, r.data);
+            _persistFreeDict();
+            backfillEntryPhonetic(w, r.data.phonetic);
+            return resolve(r.data);
+          }
+          if (r.ok && r.miss) misses++;
+          if (--pending === 0) {
+            done = true;
+            if (misses === srcs.length) freeDictMem.set(w, { miss: true }); // genuine "no entry" only
+            resolve(null);
+          }
+        }, () => { if (--pending === 0 && !done) { done = true; resolve(null); } });
+      }
     }).finally(() => freeDictInFlight.delete(w));
     freeDictInFlight.set(w, pr);
     return pr;
@@ -2519,6 +2610,14 @@
       <input type="checkbox" id="skipEditable" style="width:18px;height:18px;" /> 输入框/可编辑区内选中不触发
     </label>
     <div class="hint" style="margin-top:4px;">「静」静默期间两种行为都不触发。单个英文词会先显示免费词典音标与简释，再出模型结果。</div>
+    <div style="font-weight:600;font-size:13px;margin:10px 0 6px;">词典源</div>
+    <select id="dictSource" style="padding:4px 6px;">
+      <option value="auto">自动（有道 + dictionaryapi，先到先用）</option>
+      <option value="youdao">有道</option>
+      <option value="dictapi">dictionaryapi.dev</option>
+      <option value="off">关闭</option>
+    </select>
+    <div class="hint" style="margin-top:4px;">2.5 秒超时，失败静默跳过，不影响模型结果。</div>
   </div>
 
   <div class="mode-box" id="muteWrap">
@@ -2603,6 +2702,7 @@
       muteCustomInput.addEventListener('focus', pickCustom);
       muteCustomInput.addEventListener('input', pickCustom);
     }
+    if ($('dictSource')) $('dictSource').value = getDictSource();
     $('syncUrl').value = getApiUrl();
     $('syncEmail').value = storeGet('sensebook_sync_email', '') || '';
 
@@ -2623,6 +2723,7 @@
       if (autoSaveVocabInput) setAutoSaveVocabEnabled(!!autoSaveVocabInput.checked);
       setTriggerMode(trigIcon && trigIcon.checked ? TRIGGER_MODE_ICON : TRIGGER_MODE_AUTO);
       if (skipEditableInput) setSkipEditableEnabled(!!skipEditableInput.checked);
+      if ($('dictSource')) setDictSource($('dictSource').value);
       const pickedMute = muteRadios.find((el) => el.checked);
       if (pickedMute) {
         let sec;
