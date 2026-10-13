@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202610101817
+// @version      0.1.202610140324
 // @description  划词自动查询 / 翻译 / 加入生词本 / 存本并释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -13,6 +13,7 @@
 // @grant        GM_xmlhttpRequest
 // @connect      127.0.0.1
 // @connect      localhost
+// @connect      api.dictionaryapi.dev
 // @connect      *
 // @run-at       document-idle
 // @inject-into  content
@@ -287,6 +288,82 @@
     '正确 ai_sentence_gloss「与 speed 搭配时强调速度之惊人/极快；在本句中…」。' +
     '只输出 JSON：{"ai_word_sense":"…","ai_sentence_gloss":"…"}。不要 Markdown 或其它文字。';
 
+  // ---- length-aware prompts (idea inspired by nextai-translator; code is our own) ----
+  /** 'word' = single English token; 'phrase' = ≤5 Latin words or short CJK; 'text' = longer. */
+  function classifyQueryText(text) {
+    const t = String(text || '').trim();
+    if (!t) return 'text';
+    if (/^[A-Za-z][A-Za-z'\-]*$/.test(t) && t.length <= 30) return 'word';
+    const cjk = (t.match(/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/g) || []).length;
+    if (cjk > 0) {
+      if (t.length <= 8 && !/[。！？!?.;；，,]/.test(t)) return 'phrase';
+      return 'text';
+    }
+    const words = t.split(/\s+/).filter(Boolean);
+    if (words.length <= 5 && t.length <= 48 && !/[.!?;。！？]\s*\S/.test(t)) return 'phrase';
+    return 'text';
+  }
+
+  function senseLabelsFor(text) {
+    return classifyQueryText(text) === 'text'
+      ? { sense: '译文', gloss: '句意' }
+      : { sense: '词义', gloss: '搭配效果' };
+  }
+
+  const ENRICH_WORD_EXTRA =
+    '本次选中的是单个英文词。ai_word_sense 用多行纯文本（不要 Markdown 符号如 ** #），按此结构：' +
+    '第1行「原形：<lemma>　音标：/<IPA>/」（选中词即原形时照写）；' +
+    '第2行「【本句】<词性> <本句语境下的义项>」——语境义放最前；' +
+    '随后按词性列其它常见义项，每个词性一行，如「adj. …；…」「v. …」；' +
+    '然后「例句：」加 3 条简短英文例句，每条后接 — 中文译文；' +
+    '若选中词疑似拼写错误，最后加一行「拼写提示：可能是 <正确拼写>」，否则不要这一行。' +
+    'ai_sentence_gloss 仍只讲句内搭配效果，1–3 句。';
+  const ENRICH_PHRASE_EXTRA =
+    '本次选中的是短语/短词组。ai_word_sense 用多行纯文本：「常见译法：」后给 2–3 种常见中文译法（用 1) 2) 3) 编号，各附一句适用场景或语域，如口语/书面/技术）；' +
+    '不要把句中其它词的意思焊进来。ai_sentence_gloss＝该短语在本句中的语气/搭配效果，1–3 句。';
+  const ENRICH_TEXT_SYSTEM_PROMPT =
+    '你是简洁准确的中文翻译与阅读助手。用户选中了一段较长文本。' +
+    '只输出 JSON：{"ai_word_sense":"…","ai_sentence_gloss":"…"}，不要 Markdown 或其它文字。' +
+    'ai_word_sense＝自然流畅的中文译文（完整、不增删）；' +
+    'ai_sentence_gloss＝句意要点：用 1–3 句点出主旨、难点词或隐含语气（不要重复译文）。';
+
+  function buildEnrichSystemPrompt(kind) {
+    if (kind === 'text') return ENRICH_TEXT_SYSTEM_PROMPT;
+    if (kind === 'phrase') return ENRICH_SYSTEM_PROMPT + ENRICH_PHRASE_EXTRA;
+    return ENRICH_SYSTEM_PROMPT + ENRICH_WORD_EXTRA;
+  }
+
+  function buildTranslateMessages(text) {
+    const kind = classifyQueryText(text);
+    if (kind === 'word') {
+      return [
+        { role: 'system', content: '你是简洁的英汉词典助手。只输出纯文本（不要 Markdown 符号），结构：第1行「原形：…　音标：/…/」；之后按词性每行列常见中文义项（如「n. …；…」）；然后「例句：」加 3 条短例句，每条后接 — 中文译文；若疑似拼写错误，最后一行「拼写提示：可能是 …」，否则省略。' },
+        { role: 'user', content: text },
+      ];
+    }
+    if (kind === 'phrase') {
+      return [
+        { role: 'system', content: '你是简洁的翻译助手。只输出纯文本：给出 2–3 种常见中文译法，用 1) 2) 3) 编号，每种后用一句话说明适用场景或语域。不要其它解释。' },
+        { role: 'user', content: text },
+      ];
+    }
+    return [
+      { role: 'system', content: '你是简洁、准确的中文翻译助手。只输出中文译文，不要解释。' },
+      { role: 'user', content: `请将下面文本翻译成自然的中文：\n${text}` },
+    ];
+  }
+
+  // ---- trigger strategy ----
+  const TRIGGER_MODE_KEY = 'sensebook_trigger_mode';
+  const TRIGGER_MODE_AUTO = 'auto';
+  const TRIGGER_MODE_ICON = 'icon';
+  const SKIP_EDITABLE_KEY = 'sensebook_skip_editable';
+
+  // ---- free dictionary preview (dictionaryapi.dev) ----
+  const FREE_DICT_CACHE_KEY = 'sensebook_freedict_cache';
+  const FREE_DICT_CACHE_CAP = 300;
+  const FREE_DICT_URL = 'https://api.dictionaryapi.dev/api/v2/entries/en/';
+
   // ---- storage helpers (safe gmGet/gmSet + localStorage fallback) ----
   function coerceStoreValue(v) {
     // GM backends sometimes return JSON strings for objects we stored as objects.
@@ -470,6 +547,7 @@
       }
     } catch { /* ignore */ }
     try { hidePopup(); } catch { /* ignore */ }
+    try { hideSelIcon(); } catch { /* ignore */ }
     selectionGen += 1; // drop in-flight auto results
     try { hideFabSheet(); } catch { /* ignore */ }
     try {
@@ -541,6 +619,173 @@
 
   function setAutoSaveVocabEnabled(on) {
     storeSet(AUTO_SAVE_VOCAB_KEY, !!on);
+  }
+
+  /** 选中后行为: 'auto' (default, popup + auto query) | 'icon' (tiny icon first). */
+  function getTriggerMode() {
+    return storeGet(TRIGGER_MODE_KEY, TRIGGER_MODE_AUTO) === TRIGGER_MODE_ICON ? TRIGGER_MODE_ICON : TRIGGER_MODE_AUTO;
+  }
+  function setTriggerMode(m) {
+    storeSet(TRIGGER_MODE_KEY, m === TRIGGER_MODE_ICON ? TRIGGER_MODE_ICON : TRIGGER_MODE_AUTO);
+  }
+  /** 输入框/可编辑区内选中不触发. Default ON. */
+  function isSkipEditableEnabled() {
+    const v = storeGet(SKIP_EDITABLE_KEY, true);
+    if (v === false || v === 'false' || v === 0 || v === '0') return false;
+    return true;
+  }
+  function setSkipEditableEnabled(on) {
+    storeSet(SKIP_EDITABLE_KEY, !!on);
+  }
+
+  function _isEditableEl(el) {
+    try {
+      for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+        const tag = String(n.tagName || '').toUpperCase();
+        if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
+        if (tag === 'INPUT') {
+          const ty = String(n.type || 'text').toLowerCase();
+          if (!['button', 'submit', 'reset', 'checkbox', 'radio', 'image', 'range', 'color', 'file'].includes(ty)) return true;
+        }
+        if (n.isContentEditable) return true;
+        const ce = n.getAttribute && n.getAttribute('contenteditable');
+        if (ce != null && ce !== 'false') return true;
+      }
+    } catch { /* ignore */ }
+    return false;
+  }
+
+  function selectionInEditable(sel) {
+    try {
+      const ae = document.activeElement;
+      if (ae && ae !== document.body && _isEditableEl(ae)) {
+        const tag = String(ae.tagName || '').toUpperCase();
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return true;
+      }
+      const node = sel && sel.anchorNode;
+      const el = node && (node.nodeType === 3 ? node.parentElement : node);
+      if (el && _isEditableEl(el)) return true;
+      const fnode = sel && sel.focusNode;
+      const fel = fnode && (fnode.nodeType === 3 ? fnode.parentElement : fnode);
+      if (fel && _isEditableEl(fel)) return true;
+    } catch { /* ignore */ }
+    return false;
+  }
+
+  // ---- free dictionary (in-memory + store cache; failures silent) ----
+  const freeDictMem = new Map(); // word -> { phonetic, defs } | { miss: true }
+  const freeDictInFlight = new Map();
+  let freeDictStoreLoaded = false;
+
+  function _loadFreeDictStore() {
+    if (freeDictStoreLoaded) return;
+    freeDictStoreLoaded = true;
+    try {
+      let raw = storeGet(FREE_DICT_CACHE_KEY, []);
+      if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { raw = []; } }
+      if (!Array.isArray(raw)) return;
+      for (const r of raw) if (r && r.w) freeDictMem.set(r.w, r.d);
+    } catch { /* ignore */ }
+  }
+
+  function _persistFreeDict() {
+    try {
+      const arr = [];
+      for (const [w, d] of freeDictMem) if (d && !d.miss) arr.push({ w, d });
+      storeSet(FREE_DICT_CACHE_KEY, arr.slice(-FREE_DICT_CACHE_CAP));
+    } catch { /* ignore */ }
+  }
+
+  function parseFreeDictPayload(data) {
+    if (!Array.isArray(data) || !data.length) return null;
+    let phonetic = '';
+    const defs = [];
+    for (const ent of data) {
+      if (!phonetic && ent && typeof ent.phonetic === 'string' && ent.phonetic.trim()) phonetic = ent.phonetic.trim();
+      if (!phonetic && ent && Array.isArray(ent.phonetics)) {
+        const ph = ent.phonetics.find((x) => x && typeof x.text === 'string' && x.text.trim());
+        if (ph) phonetic = ph.text.trim();
+      }
+      for (const m of (ent && Array.isArray(ent.meanings) ? ent.meanings : [])) {
+        if (defs.length >= 2) break;
+        const d = m && Array.isArray(m.definitions) && m.definitions[0];
+        if (d && typeof d.definition === 'string' && d.definition.trim()) {
+          let def = d.definition.trim();
+          if (def.length > 110) def = def.slice(0, 107) + '…';
+          defs.push({ pos: String((m && m.partOfSpeech) || ''), def });
+        }
+      }
+    }
+    if (!phonetic && !defs.length) return null;
+    return { phonetic, defs };
+  }
+
+  function getFreeDictSync(word) {
+    _loadFreeDictStore();
+    const w = String(word || '').trim().toLowerCase();
+    const hit = freeDictMem.get(w);
+    return hit && !hit.miss ? hit : null;
+  }
+
+  /** Resolves to { phonetic, defs } or null. Never throws. */
+  function lookupFreeDict(word) {
+    _loadFreeDictStore();
+    const w = String(word || '').trim().toLowerCase();
+    if (!isShortWordToken(w)) return Promise.resolve(null);
+    if (freeDictMem.has(w)) {
+      const hit = freeDictMem.get(w);
+      return Promise.resolve(hit && !hit.miss ? hit : null);
+    }
+    if (freeDictInFlight.has(w)) return freeDictInFlight.get(w);
+    const pr = new Promise((resolve) => {
+      let done = false;
+      const finish = (v) => { if (!done) { done = true; resolve(v); } };
+      setTimeout(() => finish(null), 6000);
+      try {
+        gmXhr({
+          method: 'GET',
+          url: FREE_DICT_URL + encodeURIComponent(w),
+          timeout: 6000,
+          onload: (res) => {
+            try {
+              if (res.status === 404) { freeDictMem.set(w, { miss: true }); return finish(null); }
+              if (res.status < 200 || res.status >= 300) return finish(null);
+              const parsed = parseFreeDictPayload(JSON.parse(res.responseText || 'null'));
+              if (!parsed) { freeDictMem.set(w, { miss: true }); return finish(null); }
+              freeDictMem.set(w, parsed);
+              _persistFreeDict();
+              backfillEntryPhonetic(w, parsed.phonetic);
+              finish(parsed);
+            } catch { finish(null); }
+          },
+          onerror: () => finish(null),
+          ontimeout: () => finish(null),
+        });
+      } catch { finish(null); }
+    }).finally(() => freeDictInFlight.delete(w));
+    freeDictInFlight.set(w, pr);
+    return pr;
+  }
+
+  /** Local-only field: fill phonetic on vocab entries lacking it (no sync dirty). */
+  function backfillEntryPhonetic(word, phonetic) {
+    if (!phonetic) return;
+    try {
+      const list = loadAllEntries();
+      let changed = false;
+      for (const e of list) {
+        if (!e.deleted_at && !e.phonetic && normalizeWord(e.word) === word) { e.phonetic = phonetic; changed = true; }
+      }
+      if (changed) saveEntries(list);
+    } catch { /* ignore */ }
+  }
+
+  function formatFreeDict(d) {
+    if (!d) return '';
+    const lines = [];
+    if (d.phonetic) lines.push(d.phonetic);
+    for (const x of d.defs || []) lines.push((x.pos ? x.pos + ' ' : '') + x.def);
+    return lines.join('\n');
   }
 
   // ---- Local dict (GM cache; versioned independently of @version) ----
@@ -808,9 +1053,17 @@
       normalizeWord(entry.word) === normalizeWord(word) &&
       String(entry.sentence || '').trim() === String(sentence || word || '').trim() &&
       String(entry.source_url || '') === String(source_url || ''));
-    if (existing) return existing;
+    if (existing) {
+      // Same word+context looked up/saved again → bump lookup_count (old entries default 1).
+      return patchLocalEntry(existing.id, { lookup_count: (Number(existing.lookup_count) || 1) + 1 }) || existing;
+    }
+    const sameWord = list.filter((e) => !e.deleted_at && normalizeWord(e.word) === normalizeWord(word));
+    const priorCount = sameWord.reduce((m, e) => Math.max(m, Number(e.lookup_count) || 1), 0);
+    const fd = getFreeDictSync(word);
     const entry = {
       id: uuid(),
+      lookup_count: priorCount + 1,
+      phonetic: (fd && fd.phonetic) || (sameWord.find((e) => e.phonetic) || {}).phonetic || '',
       word: word || '',
       sentence: sentence || word || '',
       ai_sentence_gloss: null,
@@ -833,6 +1086,18 @@
     saveEntries(list);
     scheduleSync();
     return entry;
+  }
+
+  /** Repeat lookup that hit cache: bump count on an existing vocab entry (never creates). */
+  function bumpLookupCount(word, sentence, source_url) {
+    try {
+      const list = loadAllEntries();
+      const ex = list.find((e) => !e.deleted_at && normalizeWord(e.word) === normalizeWord(word) &&
+        String(e.sentence || '').trim() === String(sentence || word || '').trim() &&
+        String(e.source_url || '') === String(source_url || '')) ||
+        list.find((e) => !e.deleted_at && normalizeWord(e.word) === normalizeWord(word));
+      if (ex) patchLocalEntry(ex.id, { lookup_count: (Number(ex.lookup_count) || 1) + 1 });
+    } catch { /* ignore */ }
   }
 
   // ---- query cache (local lookup history; LRU by updated_at) ----
@@ -1230,6 +1495,10 @@
       overflow: 'auto',
       boxSizing: 'border-box',
     });
+    const dictRow = document.createElement('div');
+    dictRow.setAttribute('data-slot', 'dict');
+    dictRow.style.display = 'none';
+    el.appendChild(dictRow);
     const localRow = document.createElement('div');
     localRow.setAttribute('data-slot', 'local');
     localRow.style.display = 'none';
@@ -1257,6 +1526,11 @@
     el.style.borderColor = '#e2e8f0';
     const localRow = el.querySelector('[data-slot="local"]');
     const modelRow = el.querySelector('[data-slot="model"]');
+    const dictRow = el.querySelector('[data-slot="dict"]');
+    if (dictRow) {
+      dictRow.style.display = 'none';
+      while (dictRow.firstChild) dictRow.removeChild(dictRow.firstChild);
+    }
     if (localRow) {
       localRow.style.display = 'none';
       while (localRow.firstChild) localRow.removeChild(localRow.firstChild);
@@ -1304,7 +1578,9 @@
     if (!gloss) {
       localRow.style.display = 'none';
       const modelRow = el.querySelector('[data-slot="model"]');
-      if (!modelRow || modelRow.style.display === 'none') el.style.display = 'none';
+      const dictRow = el.querySelector('[data-slot="dict"]');
+      if ((!modelRow || modelRow.style.display === 'none') &&
+        (!dictRow || dictRow.style.display === 'none')) el.style.display = 'none';
       return;
     }
     el.style.display = 'block';
@@ -1325,6 +1601,45 @@
     });
     text.textContent = String(gloss);
     localRow.appendChild(text);
+  }
+
+  /** Free dictionary instant preview row (phonetic + ≤2 short definitions). */
+  function setFreeDictRow(d) {
+    const el = ensurePopupResultEl();
+    if (!el) return;
+    const row = el.querySelector('[data-slot="dict"]');
+    if (!row) return;
+    while (row.firstChild) row.removeChild(row.firstChild);
+    if (!d) { row.style.display = 'none'; return; }
+    el.style.display = 'block';
+    row.style.display = 'block';
+    applyStyles(row, { marginBottom: '8px', paddingBottom: '8px', borderBottom: '1px dashed #cbd5e1' });
+    _paintMetaHint(row, '词典', '#f59e0b');
+    if (d.phonetic) {
+      const ph = document.createElement('div');
+      applyStyles(ph, { color: '#0369a1', fontWeight: '600' });
+      ph.setAttribute('data-sensebook-phonetic', '1');
+      ph.textContent = d.phonetic;
+      row.appendChild(ph);
+    }
+    for (const x of d.defs || []) {
+      const line = document.createElement('div');
+      applyStyles(line, { color: '#334155', fontSize: '12px', wordBreak: 'break-word' });
+      line.textContent = (x.pos ? x.pos + ' · ' : '') + x.def;
+      row.appendChild(line);
+    }
+  }
+
+  /** Kick free-dict preview for single English words; silent on failure. */
+  function kickFreeDictPreview(reqId, word) {
+    if (!isShortWordToken(word)) return;
+    const sync = getFreeDictSync(word);
+    if (sync) { setFreeDictRow(sync); return; }
+    lookupFreeDict(word).then((d) => {
+      if (!d || reqId !== selectionGen || !popup || isMuted()) return;
+      setFreeDictRow(d);
+      if (lastSel && lastSel.rect) repositionPopup(lastSel.rect);
+    }).catch(() => {});
   }
 
   /** Model / cache / error row — independent of local dict row. */
@@ -1395,6 +1710,7 @@
     const sense = String(ai_word_sense || '').trim();
     const gloss = String(ai_sentence_gloss || '').trim();
     const k = kind || 'ok';
+    const labels = senseLabelsFor(lastSel && lastSel.text);
 
     if (sense) {
       localRow.style.display = 'block';
@@ -1403,7 +1719,7 @@
         paddingBottom: gloss ? '8px' : '0',
         borderBottom: gloss ? '1px solid #e9e5ff' : 'none',
       });
-      _paintMetaHint(localRow, '词义', '#8b5cf6');
+      _paintMetaHint(localRow, labels.sense, '#8b5cf6');
       const text = document.createElement('div');
       applyStyles(text, {
         color: k === 'error' ? '#b91c1c' : '#0f172a',
@@ -1428,7 +1744,7 @@
         paddingBottom: '0',
         borderBottom: 'none',
       });
-      _paintMetaHint(modelRow, '搭配效果', '#a78bfa');
+      _paintMetaHint(modelRow, labels.gloss, '#a78bfa');
       const text = document.createElement('div');
       applyStyles(text, {
         whiteSpace: 'pre-wrap',
@@ -2191,6 +2507,20 @@
     <div class="hint" style="margin-top:4px;">默认开启：自动查询成功后写入生词本；关闭后只展示、不自动入库。</div>
   </div>
 
+  <div class="mode-box" id="triggerWrap">
+    <div style="font-weight:600;font-size:13px;margin-bottom:8px;">选中后行为</div>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:500;margin:0 0 6px;">
+      <input type="radio" name="triggerMode" id="triggerModeAuto" value="auto" style="width:16px;height:16px;" /> 自动查询（弹出浮层）
+    </label>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:500;margin:0 0 8px;">
+      <input type="radio" name="triggerMode" id="triggerModeIcon" value="icon" style="width:16px;height:16px;" /> 只出小图标（点图标再弹浮层并查询）
+    </label>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:600;margin:0;">
+      <input type="checkbox" id="skipEditable" style="width:18px;height:18px;" /> 输入框/可编辑区内选中不触发
+    </label>
+    <div class="hint" style="margin-top:4px;">「静」静默期间两种行为都不触发。单个英文词会先显示免费词典音标与简释，再出模型结果。</div>
+  </div>
+
   <div class="mode-box" id="muteWrap">
     <div style="font-weight:600;font-size:13px;margin-bottom:8px;">快捷静默时长</div>
     <label style="display:flex;align-items:center;gap:8px;font-weight:500;margin:0 0 6px;">
@@ -2250,6 +2580,13 @@
     if (modeSenseInput) modeSenseInput.checked = curMode === AUTO_QUERY_MODE_SENSE;
     if (modeTranslateInput) modeTranslateInput.checked = curMode === AUTO_QUERY_MODE_TRANSLATE;
     if (autoSaveVocabInput) autoSaveVocabInput.checked = isAutoSaveVocabEnabled();
+    const trigAuto = $('triggerModeAuto');
+    const trigIcon = $('triggerModeIcon');
+    const skipEditableInput = $('skipEditable');
+    const trigNow = getTriggerMode();
+    if (trigAuto) trigAuto.checked = trigNow === TRIGGER_MODE_AUTO;
+    if (trigIcon) trigIcon.checked = trigNow === TRIGGER_MODE_ICON;
+    if (skipEditableInput) skipEditableInput.checked = isSkipEditableEnabled();
     const muteSecNow = getMuteSeconds();
     const muteRadios = Array.from(shadow.querySelectorAll('input[name="muteSec"]'));
     const muteCustomInput = $('muteSecCustom');
@@ -2284,6 +2621,8 @@
       if (modeTranslateInput && modeTranslateInput.checked) setAutoQueryMode(AUTO_QUERY_MODE_TRANSLATE);
       else setAutoQueryMode(AUTO_QUERY_MODE_SENSE);
       if (autoSaveVocabInput) setAutoSaveVocabEnabled(!!autoSaveVocabInput.checked);
+      setTriggerMode(trigIcon && trigIcon.checked ? TRIGGER_MODE_ICON : TRIGGER_MODE_AUTO);
+      if (skipEditableInput) setSkipEditableEnabled(!!skipEditableInput.checked);
       const pickedMute = muteRadios.find((el) => el.checked);
       if (pickedMute) {
         let sec;
@@ -2806,7 +3145,9 @@
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
             <div style="font-weight:700;font-size:15px;">${escapeHtml(e.word)}
               <span style="font-size:11px;padding:2px 6px;border-radius:999px;background:#e2e8f0;font-weight:500;margin-left:6px;">${escapeHtml(e.status || '')}</span>
+              <span data-lookup-count="${escapeHtml(e.id)}" title="查询/保存次数" style="font-size:11px;padding:2px 6px;border-radius:999px;background:#ede9fe;color:#6d28d9;font-weight:500;margin-left:4px;">×${Math.max(1, Number(e.lookup_count) || 1)}</span>
             </div>
+            ${e.phonetic ? `<span style="font-size:12px;color:#0369a1;">${escapeHtml(e.phonetic)}</span>` : ''}
             <button type="button" data-speak-word="${escapeHtml(e.id)}" aria-label="朗读单词" title="朗读单词" style="width:28px;height:28px;min-width:28px;padding:0;border:none;border-radius:8px;background:#0ea5e9;color:#fff;cursor:pointer;font-size:13px;line-height:1;">🔊</button>
           </div>
           <div style="margin:6px 0;color:#334155;font-size:13px;display:flex;align-items:flex-start;gap:8px;">
@@ -2994,7 +3335,13 @@
     const idx = list.findIndex((entry) => entry.id === remote.id);
     if (idx >= 0 && list[idx].sync_dirty && !force) return false;
     const next = { ...remote, sync_revision: remote.revision, sync_dirty: false };
-    if (idx >= 0) list[idx] = next;
+    if (idx >= 0) {
+      // lookup_count / phonetic are not yet server columns: keep the local values.
+      const loc = list[idx];
+      next.lookup_count = Math.max(Number(loc.lookup_count) || 1, Number(remote.lookup_count) || 1);
+      if (!next.phonetic && loc.phonetic) next.phonetic = loc.phonetic;
+      list[idx] = next;
+    }
     else list.unshift(next);
     saveEntries(list);
     return true;
@@ -3166,17 +3513,14 @@
 
   async function callLlmEnrich({ word, sentence, source_url }) {
     return callLlmChatCompletions([
-      { role: 'system', content: ENRICH_SYSTEM_PROMPT },
+      { role: 'system', content: buildEnrichSystemPrompt(classifyQueryText(word)) },
       { role: 'user', content: buildEnrichUserPrompt({ word, sentence, source_url }) },
     ]);
   }
 
 
   async function callLlmTranslate(text) {
-    return callLlmChatCompletions([
-      { role: 'system', content: '你是简洁、准确的中文翻译助手。只输出中文译文，不要解释。' },
-      { role: 'user', content: `请将下面文本翻译成自然的中文：\n${text}` },
-    ], parseTranslationContent, { jsonResponse: false });
+    return callLlmChatCompletions(buildTranslateMessages(text), parseTranslationContent, { jsonResponse: false });
   }
 
   /** Enrich one entry: real LLM if key set, else stub. */
@@ -3391,16 +3735,18 @@
     }
   }
 
-  function scheduleAutoQuery(reqId) {
+  function scheduleAutoQuery(reqId, force) {
     if (autoQueryTimer) {
       clearTimeout(autoQueryTimer);
       autoQueryTimer = null;
     }
-    if (!isAutoQueryEnabled()) return;
     if (isMuted()) return;
     const word = lastSel.text;
     const sentence = lastSel.sentence || lastSel.text;
     if (!word) return;
+    // Free dictionary preview runs even when auto-query is off / no API key.
+    kickFreeDictPreview(reqId, word);
+    if (!force && !isAutoQueryEnabled()) return;
 
     const mode = getAutoQueryMode();
 
@@ -3419,6 +3765,7 @@
             ai_sentence_gloss: cacheHit.ai_sentence_gloss,
           }, 'ok');
           if (lastSel.rect) repositionPopup(lastSel.rect);
+          if (isAutoSaveVocabEnabled()) bumpLookupCount(word, sentence, location.href);
           return;
         }
 
@@ -3498,6 +3845,7 @@
       if (cacheHit && cacheHit.translation) {
         setModelRow(formatTranslateResult(cacheHit) || '(空)', 'cache');
         // Still keep local row if present; no forced network refresh.
+        if (isAutoSaveVocabEnabled()) bumpLookupCount(word, sentence, location.href);
         return;
       }
 
@@ -3677,6 +4025,13 @@
 
   /** Keep popup near live selection (clamp/flip), or hide if selection is gone. */
   function followSelectionOrHide() {
+    if (selIconEl) {
+      try {
+        const sel = window.getSelection && window.getSelection();
+        const r = sel && sel.rangeCount && !sel.isCollapsed ? _selectionRect(sel.getRangeAt(0)) : null;
+        if (r && !isMuted()) { lastSel.rect = r; positionSelIcon(r); } else hideSelIcon();
+      } catch { hideSelIcon(); }
+    }
     if (!popup) return;
     if (isMuted()) {
       hidePopup();
@@ -3711,6 +4066,7 @@
     // 静默中：不显示浮层、不自动查询（各 frame 共享同一 mute_until）。
     if (isMuted()) {
       if (popup) hidePopup();
+      hideSelIcon();
       return;
     }
     // Do not gate on busy — auto-query / parallel lookups must allow new selection
@@ -3718,11 +4074,13 @@
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) {
       hidePopup();
+      hideSelIcon();
       return;
     }
     const text = sel.toString().trim();
     if (!text || text.length > 200) {
       hidePopup();
+      hideSelIcon();
       return;
     }
     // Ignore selections inside Sensebook UI
@@ -3734,9 +4092,30 @@
       }
     } catch { /* ignore */ }
 
+    // 输入框/可编辑区内选中不触发 (default ON)
+    if (isSkipEditableEnabled() && selectionInEditable(sel)) {
+      if (popup) hidePopup();
+      hideSelIcon();
+      return;
+    }
+
     const range = sel.getRangeAt(0);
     const rect = _selectionRect(range);
     if (!rect) return;
+
+    // 只出小图标: show icon; click opens popup + queries.
+    if (getTriggerMode() === TRIGGER_MODE_ICON && !(popup && lastSel && lastSel.text === text)) {
+      if (selIconEl && lastSel && lastSel.text === text) {
+        lastSel.rect = rect;
+        positionSelIcon(rect);
+        return;
+      }
+      hidePopup();
+      selectionGen += 1;
+      lastSel = { text, sentence: extractSentence(range), rect };
+      showSelIcon(rect);
+      return;
+    }
 
     // Same selection already shown (e.g. mouseup + selectionchange): refresh position only.
     if (popup && lastSel && lastSel.text === text) {
@@ -3754,6 +4133,69 @@
     };
     showPopup(rect);
     scheduleAutoQuery(reqId);
+  }
+
+  // ---- selection icon (选中后行为 = 只出小图标) ----
+  let selIconEl = null;
+  function hideSelIcon() {
+    if (selIconEl) {
+      try { selIconEl.remove(); } catch { /* ignore */ }
+      selIconEl = null;
+    }
+  }
+  function positionSelIcon(rect) {
+    if (!selIconEl || !rect) return;
+    const size = _isCoarsePointer() ? 34 : 26;
+    const vw = window.innerWidth || 0;
+    const vh = window.innerHeight || 0;
+    // Below the selection end (Android's native action bar sits above).
+    let left = rect.right + 4;
+    let top = rect.bottom + 6;
+    if (left + size > vw - 6) left = Math.max(6, vw - size - 6);
+    if (top + size > vh - 6) top = Math.max(6, rect.top - size - 6);
+    selIconEl.style.left = left + 'px';
+    selIconEl.style.top = top + 'px';
+  }
+  function showSelIcon(rect) {
+    hideSelIcon();
+    const size = _isCoarsePointer() ? 34 : 26;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.id = 'sensebook-sel-icon';
+    b.setAttribute('aria-label', 'Sensebook 查询');
+    b.textContent = 'S';
+    applyStyles(b, {
+      position: 'fixed', zIndex: '2147483646', width: size + 'px', height: size + 'px',
+      padding: '0', margin: '0', border: 'none', borderRadius: '50%', background: '#7c3aed',
+      color: '#fff', fontWeight: '700', fontSize: (size > 30 ? 15 : 13) + 'px', lineHeight: size + 'px',
+      fontFamily: 'system-ui,sans-serif', cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,.25)',
+      touchAction: 'manipulation', userSelect: 'none', webkitUserSelect: 'none',
+    });
+    // Keep the page selection alive when tapping the icon.
+    const keep = (e) => { try { e.preventDefault(); e.stopPropagation(); } catch { /* ignore */ } };
+    b.addEventListener('mousedown', keep);
+    b.addEventListener('pointerdown', keep);
+    b.addEventListener('touchstart', keep, { passive: false });
+    let fired = false;
+    const open = (e) => {
+      keep(e);
+      if (fired) return;
+      fired = true;
+      openPopupFromSelIcon();
+    };
+    b.addEventListener('click', open);
+    b.addEventListener('touchend', open, { passive: false });
+    selIconEl = b;
+    document.documentElement.appendChild(b);
+    positionSelIcon(rect);
+  }
+  function openPopupFromSelIcon() {
+    hideSelIcon();
+    if (isMuted() || !lastSel || !lastSel.text) return;
+    selectionGen += 1;
+    const reqId = selectionGen;
+    showPopup(lastSel.rect);
+    scheduleAutoQuery(reqId, true);
   }
 
   // Android Chrome long-press often skips touchend/mouseup; selectionchange is the reliable signal.
@@ -4681,6 +5123,8 @@
   try {
     window.__sensebookParseEnrichJson = parseEnrichJson;
     window.__sensebookBuildEnrichUserPrompt = buildEnrichUserPrompt;
+    window.__sensebookClassifyQueryText = classifyQueryText;
+    window.__sensebookParseFreeDict = parseFreeDictPayload;
   } catch { /* ignore */ }
 
   } catch (err) { // sensebook-main

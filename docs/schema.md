@@ -32,6 +32,8 @@
 | `source_app` | TEXT | 否 | Android 来源应用包名 |
 | `translation` | TEXT | 否 | 翻译模式缓存的译文 |
 | `revision` | INTEGER | 否 | Cloudflare 同步服务端版本号 |
+| `lookup_count` | INTEGER | 否 | 查询/保存次数（userscript 本地字段，缺省按 1）；**尚未进 D1/同步**，计划列 `lookup_count INTEGER NOT NULL DEFAULT 1`，同步合并时客户端保留本地较大值 |
+| `phonetic` | TEXT | 否 | 音标（来自免费词典 dictionaryapi.dev；userscript 本地字段，尚未进 D1/同步） |
 
 \* 本地模式由客户端生成 `id` 与 `created_at`；服务端补全 `updated_at` 和 `revision`。
 
