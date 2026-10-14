@@ -3,7 +3,7 @@
 // @namespace    https://github.com/veightz/sensebook
 // @updateURL    https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
 // @downloadURL  https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js
-// @version      0.1.202610140345
+// @version      0.1.202610141420
 // @description  划词自动查询 / 翻译 / 加入生词本 / 存本并释义 — Sensebook（本地词库 + 模型双出）
 // @author       Sensebook
 // @match        *://*/*
@@ -1660,13 +1660,24 @@
   }
 
   /** Local dict row — never overwritten by model row. */
-  function setLocalDictRow(gloss) {
+  function setLocalDictRow(hitOrGloss) {
     const el = ensurePopupResultEl();
     if (!el) return;
     const localRow = el.querySelector('[data-slot="local"]');
     if (!localRow) return;
     while (localRow.firstChild) localRow.removeChild(localRow.firstChild);
-    if (!gloss) {
+    let gloss = '';
+    let phonetic = '';
+    if (hitOrGloss && typeof hitOrGloss === 'object') {
+      gloss = hitOrGloss.gloss || formatLocalGloss(hitOrGloss.entry) || '';
+      const ent = hitOrGloss.entry;
+      if (ent && typeof ent === 'object') {
+        phonetic = (ent.i || ent.phonetic || '').trim();
+      }
+    } else if (hitOrGloss) {
+      gloss = String(hitOrGloss);
+    }
+    if (!gloss && !phonetic) {
       localRow.style.display = 'none';
       const modelRow = el.querySelector('[data-slot="model"]');
       const dictRow = el.querySelector('[data-slot="dict"]');
@@ -1684,14 +1695,23 @@
       borderBottom: '1px solid #e2e8f0',
     });
     _paintMetaHint(localRow, '本地词库', '#38bdf8');
-    const text = document.createElement('div');
-    applyStyles(text, {
-      color: '#0f172a',
-      whiteSpace: 'pre-wrap',
-      wordBreak: 'break-word',
-    });
-    text.textContent = String(gloss);
-    localRow.appendChild(text);
+    if (phonetic) {
+      const ph = document.createElement('div');
+      applyStyles(ph, { color: '#0369a1', fontWeight: '600' });
+      ph.setAttribute('data-sensebook-phonetic', '1');
+      ph.textContent = phonetic;
+      localRow.appendChild(ph);
+    }
+    if (gloss) {
+      const text = document.createElement('div');
+      applyStyles(text, {
+        color: '#0f172a',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+      });
+      text.textContent = String(gloss);
+      localRow.appendChild(text);
+    }
   }
 
   /** Free dictionary instant preview row (phonetic + ≤2 short definitions). */
@@ -3781,7 +3801,7 @@
         await ensureLocalDict();
         if (reqId !== selectionGen) return;
         localHit = lookupLocalDictSync(word);
-        if (localHit) setLocalDictRow(localHit.gloss);
+        if (localHit) setLocalDictRow(localHit);
         else setLocalDictRow(null);
       } else {
         setLocalDictRow(null);
@@ -3926,7 +3946,7 @@
       await ensureLocalDict();
       if (reqId !== selectionGen) return null;
       const hit = lookupLocalDictSync(word);
-      if (hit) setLocalDictRow(hit.gloss);
+      if (hit) setLocalDictRow(hit);
       return hit;
     })();
 

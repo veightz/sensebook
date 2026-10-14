@@ -20,7 +20,7 @@ from pathlib import Path
 TARGET = 20000
 MAX_LEN = 20
 MAX_GLOSS = 36
-DICT_VERSION = "0.1.20260916-full20k"
+DICT_VERSION = "0.1.20261014-full20k-ipa"
 TAG_BONUS = {
     "zk": 50,
     "gk": 40,
@@ -152,18 +152,26 @@ def main():
             gloss, pos = clean_gloss(row.get("translation") or "", row.get("pos") or "")
             if not gloss:
                 continue
+            ph = (row.get("phonetic") or "").strip()
+            if ph and not (ph.startswith("/") and ph.endswith("/")):
+                ph = "/" + ph.strip("/") + "/"
             prev = index.get(key)
             if prev is None or sc > prev[2]:
-                index[key] = (gloss, pos, sc)
+                index[key] = (gloss, pos, sc, ph)
+
+    def pack(gloss, pos, ph):
+        e = {"g": gloss}
+        if pos:
+            e["p"] = pos
+        if ph:
+            e["i"] = ph
+        return e
 
     entries = {}
     for w in priority:
         if w in index:
-            gloss, pos, _ = index[w]
-            e = {"g": gloss}
-            if pos:
-                e["p"] = pos
-            entries[w] = e
+            gloss, pos, _, ph = index[w]
+            entries[w] = pack(gloss, pos, ph)
         if len(entries) >= args.target:
             break
     if len(entries) < args.target:
@@ -171,11 +179,8 @@ def main():
             ((w, v) for w, v in index.items() if w not in entries),
             key=lambda kv: (-kv[1][2], kv[0]),
         )
-        for w, (gloss, pos, _) in rest:
-            e = {"g": gloss}
-            if pos:
-                e["p"] = pos
-            entries[w] = e
+        for w, (gloss, pos, _, ph) in rest:
+            entries[w] = pack(gloss, pos, ph)
             if len(entries) >= args.target:
                 break
 
@@ -183,7 +188,7 @@ def main():
         "version": args.version,
         "source": "skywind3000/ECDICT (MIT) https://github.com/skywind3000/ECDICT",
         "license": "MIT",
-        "note": "Full v1 ceiling (~20k, ≤1.5MB). Dict version is independent of userscript @version.",
+        "note": "Full v1 ceiling (~20k, ≤1.5MB) with ECDICT IPA (`i`). Dict version is independent of userscript @version.",
         "count": len(entries),
         "entries": entries,
     }
