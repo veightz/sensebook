@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="color-scheme" content="light">
+<title>Veight 的小工具箱 · Sensebook & MarkDone Lite</title>
+<meta name="description" content="自用的两个油猴脚本：Sensebook 语境划词生词本、MarkDone Lite ChatGPT 阅读增强。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='24' fill='%234f46e5'/%3E%3Ctext x='50' y='68' font-size='56' text-anchor='middle' fill='white' font-family='sans-serif'%3EV%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Veight's toolbox · 自用</p>
+    <h1>读得更顺，记得更牢。</h1>
+    <p class="lead">两个跑在浏览器里的小工具：一个把读到的生词连同语境存下来，一个让 ChatGPT 的长回答读起来不累。</p>
+    <nav class="jump" aria-label="页面导航">
+      <a href="#sensebook">Sensebook</a>
+      <a href="#markdone">MarkDone Lite</a>
+      <a href="#changelog">更新日志</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="card" id="sensebook">
+    <div class="card-head">
+      <h2>Sensebook</h2>
+      <span class="tag">油猴脚本</span>
+      <span class="ver" data-ver-for="sensebook" data-fallback="0.1.202610141420" hidden></span>
+    </div>
+    <p class="sub">语境划词生词本</p>
+    <p>在网页里划词，连同整句语境一起翻译、存进生词本并释义。读到哪、在哪个句子里遇到，都留着。</p>
+    <ul class="feat">
+      <li><b>翻译 / 存本并释义</b>由 DeepSeek 完成，API Key 只存在你本机的脚本存储里，不上传、不写进任何仓库。</li>
+      <li><b>静默按钮</b>弹框打扰时一键静音：15 秒 / 30 秒 / 5 分钟 / 自定义，还有「静到刷新」。</li>
+      <li><b>按长度选提示词</b>单词与长句用不同的提示词；先出音标和本地释义，再等模型回答。</li>
+      <li><b>安卓 / Mac 骨架</b>原生端的工程骨架已在同一仓库中，后续接同步。</li>
+    </ul>
+    <div class="actions">
+      <a class="btn primary" href="https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js">安装脚本</a>
+      <a class="btn" href="https://github.com/veightz/sensebook">GitHub 仓库</a>
+    </div>
+    <p class="hint">需要先装好 Tampermonkey 等油猴扩展；点「安装脚本」会弹出安装页。链接跟着 <code>main</code> 走，之后更新由油猴自动检查。</p>
+  </section>
+
+  <section class="card" id="markdone">
+    <div class="card-head">
+      <h2>MarkDone Lite</h2>
+      <span class="tag">油猴脚本</span>
+      <span class="ver" data-ver-for="markdone" data-fallback="0.1.202610141220" hidden></span>
+    </div>
+    <p class="sub">ChatGPT 阅读增强（轻量版）</p>
+    <p>基于开源项目 AI-MarkDone 的我们自己的分支，只留日常真正用得上的几样。</p>
+    <ul class="feat">
+      <li><b>阅读器跟人走</b>打开你正在看的那条回答，切换时只认当前激活的页面。</li>
+      <li><b>大纲钉住</b>阅读器右侧的大纲可以用 📌 固定。</li>
+      <li><b>页面宽度</b>标准 / 较宽 / 铺满，三档循环并记住。</li>
+      <li><b>软刷新</b>不整页重载，直接重新识别当前对话。</li>
+    </ul>
+    <div class="actions">
+      <a class="btn primary" href="https://raw.githubusercontent.com/veightz/AI-MarkDone/main/userscript/markdone-lite.user.js">安装脚本</a>
+      <a class="btn" href="https://github.com/veightz/AI-MarkDone">Fork 仓库</a>
+    </div>
+    <p class="note"><b>安装前请先关掉</b>商店里的原版扩展，以及旧的「已解压扩展」，否则两套会同时注入、互相打架。</p>
+  </section>
+
+  <section class="card" id="changelog">
+    <div class="card-head"><h2>更新日志</h2></div>
+    <p class="sub">手写的简要记录，最新在上。</p>
+
+    <h3>Sensebook <a class="more" href="https://github.com/veightz/sensebook/commits/main/userscript">全部提交 →</a></h3>
+    <ol class="log">
+      <li><code>0.1.202610141420</code><span>本地释义旁显示 ECDICT 音标。</span></li>
+      <li><code>0.1.202610140345</code><span>词典请求 2.5 秒超时，失败静默跳过；加入有道备用源，设置里可选「词典源」。</span></li>
+      <li><code>0.1.202610140324</code><span>按文本长度切换提示词；免费词典先出音标与释义；生词本记查询次数 ×N；选中后行为可选，输入框内不触发。</span></li>
+      <li><code>0.1.202610101817</code><span>新增「静到刷新」：一直静默，直到刷新页面。</span></li>
+      <li><code>0.1.202610092327</code><span>新增「静」快捷按钮，默认 15 秒。</span></li>
+    </ol>
+
+    <h3>MarkDone Lite <a class="more" href="https://github.com/veightz/AI-MarkDone/commits/main">全部提交 →</a></h3>
+    <ol class="log">
+      <li><code>0.1.202610141220</code><span>只认当前激活的页面，修切换会话后目录 / 工具栏消失。</span></li>
+      <li><code>扩展 fork 6.2.1</code><span>合入上游 6.2.0（适配 ChatGPT 新版、复制 Markdown 保留代码围栏等），品牌与工具栏常驻、大纲钉住以我们为准。</span></li>
+      <li><code>0.1.202610111806</code><span>修复页面宽度调节不生效。</span></li>
+      <li><code>0.1.202610100130</code><span>新增页面宽度按钮与「Lite ☰」小菜单。</span></li>
+    </ol>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <span>© Veight · 仅供自用 · 无统计、无 Cookie</span>
+    <span><a href="https://github.com/veightz">GitHub @veightz</a></span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  // 可选：实时读取脚本头里的 @version；失败（被墙/超时）就静默保持隐藏或用内置值。
+  var urls = {
+    sensebook: "https://raw.githubusercontent.com/veightz/sensebook/main/userscript/sensebook.user.js",
+    markdone: "https://raw.githubusercontent.com/veightz/AI-MarkDone/main/userscript/markdone-lite.user.js"
+  };
+  function show(key, v) {
+    var el = document.querySelector('[data-ver-for="' + key + '"]');
+    if (!el || !v) return;
+    el.textContent = "v" + v;
+    el.hidden = false;
+  }
+  Object.keys(urls).forEach(function (key) {
+    var el = document.querySelector('[data-ver-for="' + key + '"]');
+    if (el) show(key, el.getAttribute("data-fallback"));
+    if (!window.fetch || !window.AbortController) return;
+    var ctl = new AbortController();
+    var t = setTimeout(function () { ctl.abort(); }, 3000);
+    fetch(urls[key], { signal: ctl.signal, cache: "no-store" })
+      .then(function (r) { return r.ok ? r.text() : ""; })
+      .then(function (txt) {
+        var m = /@version\s+([^\s]+)/.exec(txt.slice(0, 4000));
+        if (m) show(key, m[1]);
+      })
+      .catch(function () {})
+      .then(function () { clearTimeout(t); });
+  });
+})();
+</script>
+</body>
+</html>
